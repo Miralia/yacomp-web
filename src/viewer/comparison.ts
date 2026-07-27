@@ -27,6 +27,7 @@ import { createRowNav } from "./row-nav";
 import { createSourceMenu } from "./source-menu";
 import { createFillCanvasBtn } from "./fill-canvas-btn";
 import { createToolbar } from "./toolbar";
+import { createSettingsButton } from "./settings-btn";
 import { toggleHelpOverlay, hideHelpOverlay } from "./help-overlay";
 import { normalizeGridInitialPosition, normalizeGridInitialZoom } from "./initial-state";
 import { createCloseBtn } from "./close-btn";
@@ -431,6 +432,7 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
 
   // Bottom-left toolbar (hosts source menu + fill canvas toggle)
   const toolbar = createToolbar();
+  const settingsButton = createSettingsButton(toolbar);
 
   // Shortcuts help button (added first → sits at the top) → toggles the legend.
   const helpBtnEl = document.createElement("div");
@@ -543,6 +545,7 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
     fillCanvasBtn.cleanup();
     closeBtn.cleanup();
     toolbar.cleanup();
+    settingsButton.cleanup();
     autoHide.cleanup();
     hideHelpOverlay();
     document.body.style.overflow = "";
@@ -647,7 +650,11 @@ export function insertLinkAfter(refNode: Node, link: HTMLElement): void {
   );
 }
 
-export function openWithDummyWrapper(grid: Grid, extraCleanup?: () => void): void {
+export interface ViewerHandle {
+  close: () => void;
+}
+
+export function openWithDummyWrapper(grid: Grid, extraCleanup?: () => void): ViewerHandle {
   injectCSS();
   injectFilters();
 
@@ -670,4 +677,6 @@ export function openWithDummyWrapper(grid: Grid, extraCleanup?: () => void): voi
     dummyBtn.remove();
     if (extraCleanup) extraCleanup();
   };
+
+  return { close: () => comp.close() };
 }

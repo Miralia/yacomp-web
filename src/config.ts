@@ -89,6 +89,7 @@ export interface YacompConfig {
 }
 
 const STORAGE_KEY = "yacomp_config";
+const WEB_STORAGE_KEY = "yacomp-web:config";
 const CURRENT_VERSION = 4;
 
 const ALL_SITES_ENABLED = Object.fromEntries(
@@ -277,26 +278,51 @@ export function migrate(raw: Record<string, unknown>): Record<string, unknown> {
 
 let config: YacompConfig;
 
+function readStoredConfig(): unknown {
+  try {
+    if (typeof GM_getValue === "function") {
+      return GM_getValue(STORAGE_KEY, DEFAULTS as unknown);
+    }
+  } catch {
+    // Fall through to browser storage for the embedded build.
+  }
+
+  try {
+    const raw = globalThis.localStorage?.getItem(WEB_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredConfig(value: YacompConfig): void {
+  try {
+    if (typeof GM_setValue === "function") {
+      GM_setValue(STORAGE_KEY, value);
+      return;
+    }
+  } catch {
+    // Fall through to browser storage for the embedded build.
+  }
+
+  try {
+    globalThis.localStorage?.setItem(WEB_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // Storage can be unavailable or full; in-memory state remains authoritative.
+  }
+}
+
 // Read and persist in separate try blocks: a failing GM_setValue (missing
 // grant, storage quota, private profile) must not throw the already-loaded,
 // already-validated user config away.
-let stored: unknown = null;
-try {
-  stored = GM_getValue(STORAGE_KEY, DEFAULTS as unknown);
-} catch {
-  stored = null;
-}
+const stored: unknown = readStoredConfig();
 {
   const raw =
     typeof stored === "object" && stored !== null ? (stored as Record<string, unknown>) : {};
   config = validate(migrate(raw));
 }
 if ((stored as { v?: number } | null)?.v !== CURRENT_VERSION) {
-  try {
-    GM_setValue(STORAGE_KEY, config);
-  } catch {
-    // Persisting the migrated payload can wait; in-memory config is intact.
-  }
+  writeStoredConfig(config);
 }
 
 // Typed getters
@@ -375,12 +401,7 @@ export function getConfig(): Readonly<YacompConfig> { return config; }
 // fixtures it may be undefined — fall back silently so the in-memory
 // config can still be mutated without crashing the caller.
 function persist(): void {
-  try {
-    GM_setValue(STORAGE_KEY, config);
-  } catch {
-    // no-op: GM_setValue unavailable (tests, fixture); in-memory state is
-    // still authoritative for the current session.
-  }
+  writeStoredConfig(config);
 }
 
 export function saveConfig(partial: Partial<YacompConfig>): void {

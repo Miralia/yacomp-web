@@ -1,8 +1,11 @@
+import { createHash } from "crypto";
 import { readFileSync } from "fs";
 import { join } from "path";
 
 const root = join(import.meta.dir, "..");
 const outPath = join(root, "dist", "yacomp.user.js");
+const webOutPath = join(root, "dist", "yacomp-web.esm.js");
+const webManifestPath = join(root, "dist", "yacomp-web.manifest.json");
 
 let content: string;
 try {
@@ -49,6 +52,23 @@ for (const sel of selectors) {
 // 5. Version must be present (not the placeholder)
 if (content.includes("__VERSION__")) {
   errors.push("Version placeholder __VERSION__ was not replaced");
+}
+
+try {
+  const webContent = readFileSync(webOutPath, "utf-8");
+  const manifest = JSON.parse(readFileSync(webManifestPath, "utf-8")) as {
+    file?: string;
+    sha256?: string;
+  };
+  const actualHash = createHash("sha256").update(webContent).digest("hex");
+
+  if (webContent.includes("==UserScript==")) errors.push("Web embed contains a userscript banner");
+  if (!webContent.includes("openSlowPicsCollection")) errors.push("Web embed is missing its public API");
+  if (webContent.length < 10_000) errors.push("Web embed is unexpectedly small");
+  if (manifest.file !== "yacomp-web.esm.js") errors.push("Web manifest has the wrong filename");
+  if (manifest.sha256 !== actualHash) errors.push("Web manifest checksum does not match the bundle");
+} catch (error) {
+  errors.push(`Unable to verify web embed: ${String(error)}`);
 }
 
 if (errors.length) {

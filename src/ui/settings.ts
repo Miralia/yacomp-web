@@ -315,6 +315,21 @@ const GAMMA_CYCLE_TOOLTIP =
   "Gamma-mismatch presets reachable via G / Shift+G. Uncheck to skip; drag enabled rows to reorder.";
 
 let overlay: HTMLDivElement | null = null;
+let webMode = false;
+
+const SITE_ONLY_SETTING_KEYS = new Set<keyof YacompConfig>([
+  "ptpGridImageSize",
+  "ptpGridClick",
+  "hdbitsImageClick",
+  "hdbitsManualAllThreads",
+  "ptpGridToggleStyle",
+  "ptpGridToggleCollapsed",
+  "ptpGridToggleExpanded",
+]);
+
+export function setWebSettingsMode(): void {
+  webMode = true;
+}
 
 // Tooltip controller is set when the settings overlay opens and cleared on
 // close. buildHelpIcon captures the icon -> tooltip wiring via this closure
@@ -979,7 +994,7 @@ export function openSettings(): void {
 
   const title = document.createElement("span");
   title.className = "_scf_settings_title";
-  title.textContent = "yacomp Settings";
+  title.textContent = webMode ? "yacomp-web Settings" : "yacomp Settings";
 
   const closeBtn = document.createElement("button");
   closeBtn.type = "button";
@@ -999,6 +1014,7 @@ export function openSettings(): void {
     body.appendChild(buildGroupLabel(group.label, group.tooltip));
 
     for (const item of group.items) {
+      if (webMode && SITE_ONLY_SETTING_KEYS.has(item.key)) continue;
       let el: HTMLElement;
       switch (item.type) {
         case "radio": el = buildRadio(item, renderers); break;
@@ -1011,8 +1027,10 @@ export function openSettings(): void {
   }
 
   // Sites group
-  body.appendChild(buildGroupLabel("Sites", SITES_TOOLTIP));
-  body.appendChild(buildSiteChips(renderers));
+  if (!webMode) {
+    body.appendChild(buildGroupLabel("Sites", SITES_TOOLTIP));
+    body.appendChild(buildSiteChips(renderers));
+  }
 
   // Filter Cycle group
   body.appendChild(buildGroupLabel("Filter Cycle", FILTER_CYCLE_TOOLTIP));

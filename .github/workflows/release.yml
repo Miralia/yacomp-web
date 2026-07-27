@@ -40,7 +40,11 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/yacomp.user.js
+          files: |
+            dist/yacomp.user.js
+            dist/yacomp-web.esm.js
+            dist/yacomp-web.esm.js.sha256
+            dist/yacomp-web.manifest.json
           generate_release_notes: true
           # Tags with a hyphen are semver prereleases (e.g. v5.8.14-dev.1,
           # v5.9.0-rc.1). Mark them as prerelease and keep /releases/latest/

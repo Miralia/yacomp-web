@@ -1,7 +1,8 @@
 {
-  "name": "yacomp",
+  "name": "yacomp-web",
   "version": "5.9.5",
-  "description": "Yet Another Comparison Viewer — userscript for screenshot comparison viewing",
+  "upstreamVersion": "5.9.5",
+  "description": "Embeddable web distribution of Yet Another Comparison Viewer",
   "type": "module",
   "scripts": {
     "build": "bun run scripts/build.ts",

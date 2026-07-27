@@ -8,6 +8,23 @@
 **Yet Another Comparison Viewer** — a userscript for side-by-side screenshot
 comparison on tracker and image-hosting sites.
 
+This fork also publishes `yacomp-web.esm.js`, a browser-native ESM build for
+sites that already have slow.pics collection metadata and want to open the same
+fullscreen viewer without installing a userscript. The Web build exposes
+`openSlowPicsCollection()`, stores viewer preferences in `localStorage`, and
+does not run any tracker or image-host page adapters.
+
+```js
+import { openSlowPicsCollection } from "./yacomp-web.esm.js";
+
+const viewer = openSlowPicsCollection(collection, {
+  onClose: () => console.log("viewer closed"),
+});
+
+// Hosts may also close it directly.
+viewer.close();
+```
+
 yacomp gives comparison pages a consistent fullscreen viewer across different
 sites: hover to switch sources, navigate rows from the keyboard, zoom and pan,
 and apply visual filters to inspect compression artifacts, luma/chroma

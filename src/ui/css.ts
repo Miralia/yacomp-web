@@ -354,7 +354,8 @@ export function injectCSS(): void {
     ._scf_source_menu {
       position: relative;
     }
-    ._scf_source_menu_btn {
+    ._scf_source_menu_btn,
+    ._scf_settings_btn {
       display: flex;
       align-items: center;
       justify-content: flex-start;
@@ -375,6 +376,10 @@ export function injectCSS(): void {
       opacity: .48;
       transition: width .16s ease, opacity .15s ease, background .15s ease, border-color .15s ease;
     }
+    ._scf_settings_btn {
+      justify-content: center;
+      padding: 0;
+    }
     ._scf_source_menu:hover ._scf_source_menu_btn,
     ._scf_source_menu_btn:focus-visible,
     ._scf_source_menu._scf_open ._scf_source_menu_btn {
@@ -383,13 +388,20 @@ export function injectCSS(): void {
     }
     ._scf_source_menu_btn:hover,
     ._scf_source_menu_btn:focus-visible,
-    ._scf_source_menu._scf_open ._scf_source_menu_btn {
+    ._scf_source_menu._scf_open ._scf_source_menu_btn,
+    ._scf_settings_btn:hover,
+    ._scf_settings_btn:focus-visible {
       border-color: rgba(255,255,255,.32);
       background: rgba(24,24,24,.9);
     }
-    ._scf_source_menu_btn:focus-visible {
+    ._scf_source_menu_btn:focus-visible,
+    ._scf_settings_btn:focus-visible {
       outline: 2px solid rgba(255,255,255,.72);
       outline-offset: 2px;
+    }
+    ._scf_settings_btn_icon {
+      display: block;
+      font: 22px/1 system-ui, sans-serif;
     }
     ._scf_source_menu_icon {
       position: relative;
