@@ -1,6 +1,6 @@
 {
   "name": "yacomp-web",
-  "version": "5.9.5-web.3",
+  "version": "5.9.5-web.4",
   "upstreamVersion": "5.9.5",
   "description": "Embeddable web distribution of Yet Another Comparison Viewer",
   "type": "module",
