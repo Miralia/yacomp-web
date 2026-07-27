@@ -900,13 +900,14 @@ test("settings: mouseSwitch=false suppresses pointer-driven column switching", a
   const label = page.locator("._scf_comp_label");
   const row = page.locator("._scf_comp_row").first();
 
-  // Sanity baseline: with mouseSwitch enabled (the default), moving the
+  // Sanity baseline: explicitly enable mouseSwitch before moving the
   // pointer over the right portion of the row should switch the active
   // source from col 0 → col 2 (3 visible columns, split into thirds).
   const rowBox = await row.boundingBox();
   if (!rowBox) throw new Error("row not laid out");
   const rightX = rowBox.x + (rowBox.width * 5) / 6;
   const midY = rowBox.y + rowBox.height / 2;
+  await setConfig(page, { mouseSwitch: true });
   await page.mouse.move(rightX, midY);
   await expect(label.locator("span", { hasText: "3." })).toHaveCSS("opacity", "1");
 

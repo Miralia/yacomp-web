@@ -106,7 +106,7 @@ export const DEFAULTS: Readonly<YacompConfig> = {
   toastDuration: 2000,
   zoomScaleFactor: 1.25,
   lazyLoadMargin: 200,
-  mouseSwitch: true,
+  mouseSwitch: false,
   zoomPercentBase: "original",
   oneToOnePixels: "logical" as const,
   verboseZoom: false,

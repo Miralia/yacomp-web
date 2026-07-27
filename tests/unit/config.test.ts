@@ -62,6 +62,11 @@ describe("validate — numeric clamping", () => {
   });
 });
 
+test("mouse switching is opt-in by default", () => {
+  expect(DEFAULTS.mouseSwitch).toBe(false);
+  expect(mouseSwitch()).toBe(false);
+});
+
 describe("validate — discriminated unions", () => {
   test("defaultZoomMode only accepts 'fit' or '1:1'", () => {
     expect(validate({ defaultZoomMode: "fit" }).defaultZoomMode).toBe("fit");
