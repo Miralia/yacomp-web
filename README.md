@@ -25,6 +25,11 @@ const viewer = openSlowPicsCollection(collection, {
 viewer.close();
 ```
 
+`yacomp-web` tracks stable upstream yacomp releases through an automated pull
+request. Web-only changes remain in this repository and are not proposed back
+to upstream. Release versions mirror the upstream base and add a Web revision,
+for example `5.9.5-web.1`.
+
 yacomp gives comparison pages a consistent fullscreen viewer across different
 sites: hover to switch sources, navigate rows from the keyboard, zoom and pan,
 and apply visual filters to inspect compression artifacts, luma/chroma

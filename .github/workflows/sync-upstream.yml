@@ -1,0 +1,74 @@
+name: Sync upstream stable release
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Resolve latest upstream stable release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          latest=$(curl --fail --silent --show-error \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            https://api.github.com/repos/daylinear74/yacomp/releases/latest | jq -r .tag_name)
+          current=$(bun -e 'console.log((await Bun.file("package.json").json()).upstreamVersion)')
+          echo "latest=${latest}" >> "$GITHUB_OUTPUT"
+          echo "current=v${current}" >> "$GITHUB_OUTPUT"
+
+      - name: Apply upstream release
+        if: steps.upstream.outputs.latest != steps.upstream.outputs.current
+        env:
+          LATEST_TAG: ${{ steps.upstream.outputs.latest }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/daylinear74/yacomp.git
+          git fetch --no-tags upstream "refs/tags/${LATEST_TAG}:refs/tags/${LATEST_TAG}"
+          git merge --squash -X ours "${LATEST_TAG}"
+          UPSTREAM_VERSION="${LATEST_TAG#v}" bun -e '
+            const pkg = await Bun.file("package.json").json();
+            pkg.name = "yacomp-web";
+            pkg.description = "Embeddable web distribution of Yet Another Comparison Viewer";
+            pkg.upstreamVersion = process.env.UPSTREAM_VERSION;
+            pkg.version = `${process.env.UPSTREAM_VERSION}-web.1`;
+            await Bun.write("package.json", JSON.stringify(pkg, null, 2) + "\n");
+          '
+          bun install
+          bun run typecheck
+          bun run test
+          bun run build
+          bun run verify
+
+      - name: Create synchronization pull request
+        if: steps.upstream.outputs.latest != steps.upstream.outputs.current
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: automation/sync-${{ steps.upstream.outputs.latest }}
+          delete-branch: true
+          commit-message: "chore(upstream): sync yacomp ${{ steps.upstream.outputs.latest }}"
+          title: "chore(upstream): sync yacomp ${{ steps.upstream.outputs.latest }}"
+          body: |
+            Synchronizes the latest stable yacomp release into yacomp-web.
+
+            Web-specific conflicts are resolved in favor of this repository and
+            must be reviewed before merging. The workflow has already run the
+            complete type-check, unit-test, build, and verification suite.
