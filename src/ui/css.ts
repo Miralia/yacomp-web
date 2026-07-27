@@ -400,8 +400,17 @@ export function injectCSS(): void {
       outline-offset: 2px;
     }
     ._scf_settings_btn_icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      line-height: 0;
+    }
+    ._scf_settings_btn_icon svg {
       display: block;
-      font: 22px/1 system-ui, sans-serif;
+      width: 20px;
+      height: 20px;
     }
     ._scf_source_menu_icon {
       position: relative;

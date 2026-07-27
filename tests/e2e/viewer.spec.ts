@@ -970,6 +970,26 @@ test("chrome 'always': titles, row nav and buttons all stay fully visible", asyn
   }
 });
 
+test("toolbar settings icon is centered inside its circular button", async ({ page }) => {
+  await openViewer(page, { config: { uiChromeMode: "always" } });
+
+  const centers = await page.locator("._scf_settings_btn").evaluate((button) => {
+    const icon = button.querySelector("._scf_settings_btn_icon svg");
+    if (!icon) throw new Error("settings icon svg not found");
+    const buttonBox = button.getBoundingClientRect();
+    const iconBox = icon.getBoundingClientRect();
+    return {
+      buttonX: buttonBox.left + buttonBox.width / 2,
+      buttonY: buttonBox.top + buttonBox.height / 2,
+      iconX: iconBox.left + iconBox.width / 2,
+      iconY: iconBox.top + iconBox.height / 2,
+    };
+  });
+
+  expect(Math.abs(centers.buttonX - centers.iconX)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(centers.buttonY - centers.iconY)).toBeLessThanOrEqual(0.5);
+});
+
 test("chrome 'default': titles/row nav sit dimmed, buttons auto-hide and reveal on movement", async ({ page }) => {
   await openViewer(page, { config: { uiChromeMode: "default", uiHideDelay: 200 } });
   // Resting state: nav dimmed (still visible), buttons auto-hidden.
