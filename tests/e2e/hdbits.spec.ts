@@ -973,6 +973,12 @@ test("hdbits: a mouse-sweep across columns does NOT resize 1:1 (re-fit is delibe
   );
   await page.locator("._scf_comp_link").first().click();
   await expect(page.locator("._scf_comp")).toBeVisible();
+  await page.evaluate(() => {
+    const hooks = (window as unknown as {
+      __yacomp: { saveConfig: (value: { mouseSwitch: boolean }) => void };
+    }).__yacomp;
+    hooks.saveConfig({ mouseSwitch: true });
+  });
   const row = page.locator("._scf_comp_row").first();
   const width = () => row.evaluate((el) => (el as HTMLElement).style.width);
   await page.keyboard.press("KeyO");
