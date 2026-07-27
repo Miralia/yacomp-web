@@ -927,14 +927,14 @@ function buildBackupSection(renderers: Renderer[]): HTMLElement {
   return row;
 }
 
-function close(): void {
-  if (overlay) {
-    overlay.remove();
-    overlay = null;
-    tooltipController = null;
-  }
+export function closeSettings(): boolean {
+  if (!overlay) return false;
+  overlay.remove();
+  overlay = null;
+  tooltipController = null;
   // Drop any half-finished capture so its global listeners don't linger.
   activeShortcutCapture?.();
+  return true;
 }
 
 const TOOLTIP_GAP = 6;
@@ -957,14 +957,14 @@ function positionTooltip(tooltipEl: HTMLElement, anchor: HTMLElement): void {
 }
 
 export function openSettings(): void {
-  if (overlay) { close(); return; }
+  if (overlay) { closeSettings(); return; }
 
   injectCSS();
 
   overlay = document.createElement("div");
   overlay.className = "_scf_settings_overlay";
   overlay.addEventListener("mousedown", (e) => {
-    if (e.target === overlay) close();
+    if (e.target === overlay) closeSettings();
   });
 
   const panel = document.createElement("div");
@@ -1000,7 +1000,7 @@ export function openSettings(): void {
   closeBtn.type = "button";
   closeBtn.className = "_scf_settings_close";
   closeBtn.textContent = "×";
-  closeBtn.addEventListener("click", close);
+  closeBtn.addEventListener("click", closeSettings);
 
   header.append(title, closeBtn);
 
@@ -1066,7 +1066,7 @@ export function openSettings(): void {
   doneBtn.type = "button";
   doneBtn.className = "_scf_settings_done";
   doneBtn.textContent = "Done";
-  doneBtn.addEventListener("click", close);
+  doneBtn.addEventListener("click", closeSettings);
 
   footer.append(resetBtn, doneBtn);
 

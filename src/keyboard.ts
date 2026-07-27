@@ -29,6 +29,7 @@ import { isHelpOpen, hideHelpOverlay, toggleHelpOverlay } from "./viewer/help-ov
 import { ACTIONS, type ActionId } from "./shortcuts/registry";
 import { keyShortcutMatchesEvent, mouseShortcutMatches, type MouseShortcut } from "./shortcuts/types";
 import { isShortcutCapturing } from "./shortcuts/capture-state";
+import { closeSettings } from "./ui/settings";
 import type { DragState } from "./viewer/drag";
 import type { Comp } from "./viewer/types";
 
@@ -301,6 +302,14 @@ export function setupKeyboard(hostname?: string): void {
     (e) => {
       if (isShortcutCapturing()) {
         capturedKeyUps.add(e.code);
+        return;
+      }
+      // Settings sits above the viewer. Consume both halves of Escape so its
+      // keyup cannot leak through and reset or close the viewer underneath.
+      if (e.key === "Escape" && closeSettings()) {
+        capturedKeyUps.add(e.code);
+        e.preventDefault();
+        e.stopPropagation();
         return;
       }
       if (isEditing()) return;

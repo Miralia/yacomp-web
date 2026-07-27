@@ -809,6 +809,25 @@ test("settings: openSettings renders the modal in the shadow root with config co
   await expect.poll(() => sliders.count(), { timeout: 5000 }).toBeGreaterThanOrEqual(3);
 });
 
+test("Escape closes settings, then adjustments, then the viewer", async ({ page }) => {
+  await openViewer(page);
+  await page.keyboard.press("KeyF");
+  await page.keyboard.press("KeyG");
+  await page.evaluate(() => {
+    (window as unknown as { __yacomp: YacompTestHooks }).__yacomp.openSettings();
+  });
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator("._scf_settings_overlay")).toHaveCount(0);
+  await expect(page.locator("._scf_comp")).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator("._scf_comp")).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator("._scf_comp")).toHaveCount(0);
+});
+
 test("settings: Reset Defaults immediately restores an open viewer close button position", async ({
   page,
 }) => {
