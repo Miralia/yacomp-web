@@ -970,10 +970,26 @@ test("chrome 'always': titles, row nav and buttons all stay fully visible", asyn
   }
 });
 
-test("toolbar settings icon is centered inside its circular button", async ({ page }) => {
+test("toolbar settings button matches the other controls", async ({ page }) => {
   await openViewer(page, { config: { uiChromeMode: "always" } });
 
-  const centers = await page.locator("._scf_settings_btn").evaluate((button) => {
+  const settingsButton = page.locator("._scf_settings_btn");
+  const helpButton = page.locator("._scf_help_button");
+
+  await expect(settingsButton).toHaveCSS("opacity", "0.48");
+  await expect(settingsButton).toHaveCSS(
+    "width",
+    await helpButton.evaluate((el) => getComputedStyle(el).width),
+  );
+  await expect(settingsButton).toHaveCSS(
+    "height",
+    await helpButton.evaluate((el) => getComputedStyle(el).height),
+  );
+
+  await settingsButton.hover();
+  await expect(settingsButton).toHaveCSS("opacity", "1");
+
+  const centers = await settingsButton.evaluate((button) => {
     const icon = button.querySelector("._scf_settings_btn_icon svg");
     if (!icon) throw new Error("settings icon svg not found");
     const buttonBox = button.getBoundingClientRect();
