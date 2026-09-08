@@ -17,7 +17,7 @@ fixture in `tests/fixtures/hdbits/cases/` (full DOM through `setupHDBitsCore`).
 | `>>>` / `>>` (better-than) is a separator | ✓ | 109 79242 |
 | `~` (spaced tilde) separator, BELOW `/` precedence | ✓ | 111 78043 |
 | leading comparison title in PARENT, before container | — | 057 |
-| named indivisible run → complete rows + remainder gallery | — | 113 173 206 |
+| named indivisible run stays whole unless markup separates the remainder | — | 113 173 206 211 |
 | quote/URL-sourced title is unreliable; torrent gallery → 1-wide viewer | — | 114 838405 |
 | per-source labels before showhide/BDInfo blocks | — | 105 77086, 107 80662 |
 | dangling `\|` after a dropped URL stripped | — | 108 79784 |
@@ -251,23 +251,28 @@ torrent page, a single flat image group whose only title was that blob falls bac
 to a 1-wide gallery (`Grid.gallery`, trigger reads "Show viewer"). Scoped so it
 only fires where a bogus grid would otherwise have formed — quiet untitled blocks
 stay quiet, and real Source/Encode / per-source comparisons (clean titles) are
-untouched. A clean title with an indivisible count uses its complete rows as the
-comparison and puts only the final short row in a separate gallery (80402).
+untouched. A clean title with an indivisible count keeps adjacent screenshots in
+the comparison with a short final row (80402); a separate remainder needs a
+boundary in the original markup.
 
-### Named comparison with a trailing remainder → separate gallery (82306)
+### Named comparison remainders respect image-run boundaries (updated 2026-09-07)
 `Lights Out (2016) - BD remux vs. MA HDR vs. iTunes DV vs. UHD Remux`
 (forumid 40). The linked comparison and thread H1 both establish four source
 columns, but the post contains 43 HDBits thumbnails: 40 comparison screenshots
 followed by three plot images, with no text label between the blocks. Treating
 all 43 as one comparison made the slow.pics rescue fail its divisibility check
 and downgrade "Show comparison" to a one-column manual viewer. Ruling: when an
-authoritative title supplies `C` columns, split a row-major selection at
-`N - (N % C)`. Complete rows form the named comparison; the final remainder is
-preserved as a separate one-column gallery. The custom comparison builder uses
-the same partition after a clicked or selected thread title sets the columns.
-This arithmetic partition is the default for every trusted, uninterrupted
-row-major image group; it does not depend on a blank-line gap (173). Substantive
-author content still separates independent galleries (185), and per-source
+authoritative title supplies `C` columns, an automatic split at `N - (N % C)`
+requires an authored boundary at that point: a line break, block wrapper, or
+substantive text. This retains the separate plots in 82306 and the final row
+after a single `<br>` in 173. Without such a boundary, adjacent image links,
+inline formatting, whitespace, and comments belong to one run: retain all its
+images and let the final comparison row be short. Four adjacent screenshots
+with three detected source names therefore remain one three-column comparison
+with four images and one reversible Viewer switch (211), not a 3+1 partition.
+This supersedes the earlier unconditional arithmetic split for automatic runs.
+The custom comparison builder retains its explicit selected-image partition.
+Substantive author content still separates independent galleries (185), and per-source
 column-major runs stay out of this path because flattening them would pair shots
 from the same source. Multiple distinct local column titles also delimit their
 own comparisons even inside plaintext/PRE formatting where the DOM exposes no

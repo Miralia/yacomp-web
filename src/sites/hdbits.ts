@@ -935,8 +935,8 @@ export function setupHDBitsCore(): void {
       try {
         await maybeEnrichNames(grid);
         if (!isCurrentComparisonOpen(link, generation)) return;
-        // Retain the legacy partial-grid picker for explicit callers. Parsed
-        // title-derived grids partition their short final row into a gallery.
+        // Retain the legacy partial-grid picker for explicit callers. Automatic
+        // comparisons preserve unbroken runs, including a short final row.
         if (grid.partial) openOrphanSelect(grid, container as HTMLElement, link);
         else buildComparison(grid, container as HTMLElement, link);
       } finally {

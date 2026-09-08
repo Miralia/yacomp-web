@@ -14,7 +14,7 @@ import {
   EXTERNAL_SCREENSHOT_HOST_RE, DIRECT_IMAGE_URL_RE, NON_SCREENSHOT_IMG_RE,
   isHDBitsThumbUrl, isHDBitsImagePageUrl,
 } from "./screenshot-urls";
-import { partitionTrailingRemainder } from "./partition";
+import { partitionImageRun } from "./partition";
 import { genericSourceNames } from "../util";
 
 // Re-exported from names.ts (moved there so name strategies can guard with it).
@@ -1204,8 +1204,8 @@ function isTheFarmTorrentDescription(container: Element): boolean {
  *  when the whole-container reshape fails (stray example screenshots scattered
  *  through a "Hidden text" spoiler, then the real grid — 80070), retry on the
  *  LARGEST image group alone, titled by the curated H1. A normal single block
- *  uses complete title-width rows and surfaces its trailing remainder as a
- *  separate gallery; the scattered-spoiler rescue still requires a clean
+ *  retains uninterrupted runs, separating a trailing remainder only at a DOM
+ *  boundary; the scattered-spoiler rescue still requires a clean
  *  divide. Off comparison threads / non-OP posts → null. */
 function cmpThreadLargestBlock(container: Element, groups: GridCell[][]): Grid[] | null {
   if (!groups.length) return null;
@@ -1233,11 +1233,11 @@ function cmpThreadLargestBlock(container: Element, groups: GridCell[][]): Grid[]
     return null;
   }
 
-  const partition = partitionTrailingRemainder(block, h1.length);
-  if (partition.complete.length < h1.length) return null;
+  const partition = partitionImageRun(block, h1.length);
+  if (partition.comparison.length < h1.length) return null;
   const rows: GridCell[][] = [];
-  for (let i = 0; i < partition.complete.length; i += h1.length) {
-    rows.push(partition.complete.slice(i, i + h1.length));
+  for (let i = 0; i < partition.comparison.length; i += h1.length) {
+    rows.push(partition.comparison.slice(i, i + h1.length));
   }
   const result: Grid[] = [{
     rows,
@@ -1898,28 +1898,27 @@ function galleryGridFromGroups(collected: GroupsResult | null): Grid | null {
   };
 }
 
-/** Apply the title-derived column count to a row-major image run. Complete rows
- *  stay in the named comparison and the final short row becomes its own
- *  one-column gallery. Unlike the general gallery fallback, a one-shot
- *  remainder is intentional here and must remain reachable. */
+/** Keep adjacent screenshots together even when the title width leaves a short
+ *  row. A separate trailing gallery requires an actual boundary in the markup. */
 function partitionNamedRowMajorRemainder(
   collected: GroupsResult,
   numCols: number,
-): { collected: GroupsResult; remainder: Grid | null } {
-  const partition = partitionTrailingRemainder(collected.groups.flat(), numCols);
-  if (!partition.remainder.length || partition.complete.length < numCols) {
-    return { collected, remainder: null };
+): { collected: GroupsResult; remainder: Grid | null; allowShortRow: boolean } {
+  const partition = partitionImageRun(collected.groups.flat(), numCols);
+  if (!partition.remainder.length || partition.comparison.length < numCols) {
+    return { collected, remainder: null, allowShortRow: partition.comparison.length % numCols !== 0 };
   }
 
   const groups: GridCell[][] = [];
-  for (let i = 0; i < partition.complete.length; i += numCols) {
-    groups.push(partition.complete.slice(i, i + numCols));
+  for (let i = 0; i < partition.comparison.length; i += numCols) {
+    groups.push(partition.comparison.slice(i, i + numCols));
   }
   const emptyLabels = groups.map(() => null);
   const zeros = groups.map(() => 0);
   const falseValues = groups.map(() => false);
   const firstRemainder = partition.remainder[0];
   return {
+    allowShortRow: false,
     collected: {
       groups,
       groupLabels: emptyLabels,
@@ -2032,7 +2031,7 @@ function hasPriorScreenshotOutsideGroups(groups: GridCell[][], scope: Element): 
 }
 
 /** Reshape groups into a grid based on name count */
-export function reshapeGrid(groups: GridCell[][], allImages: GridCell[], names: string[] | null): { numCols: number; gridRows: GridCell[][] } | null {
+export function reshapeGrid(groups: GridCell[][], allImages: GridCell[], names: string[] | null, allowShortRow = false): { numCols: number; gridRows: GridCell[][] } | null {
   if (!groups.length) return null;
   const firstLen = groups[0].length;
   const isProperGrid =
@@ -2047,7 +2046,7 @@ export function reshapeGrid(groups: GridCell[][], allImages: GridCell[], names: 
       names &&
       names.length >= 2 &&
       names.length !== firstLen &&
-      allImages.length % names.length === 0
+      (allImages.length % names.length === 0 || allowShortRow)
     ) {
       numCols = names.length;
       if (names.length === groups.length) {
@@ -2070,7 +2069,7 @@ export function reshapeGrid(groups: GridCell[][], allImages: GridCell[], names: 
       names &&
       names.length >= 2 &&
       allImages.length >= names.length &&
-      allImages.length % names.length === 0
+      (allImages.length % names.length === 0 || allowShortRow)
     ) {
       numCols = names.length;
     } else {
@@ -2523,6 +2522,7 @@ export function parseGrid(container: Element, excludeImgs: Set<HTMLImageElement>
     groupLeadingBreaks,
     groupPrecededByText,
   }).length === 1;
+  let allowShortRow = false;
   if (
     names &&
     total % names.length !== 0 &&
@@ -2535,6 +2535,7 @@ export function parseGrid(container: Element, excludeImgs: Set<HTMLImageElement>
       { groups, groupLabels, groupLabelEls, groupLeadingBreaks, groupPrecededByText },
       names.length,
     );
+    allowShortRow = partition.allowShortRow;
     if (partition.remainder) {
       trailingGalleries.push(partition.remainder);
       collected = partition.collected;
@@ -2542,7 +2543,7 @@ export function parseGrid(container: Element, excludeImgs: Set<HTMLImageElement>
       total = groups.flat().length;
     }
   }
-  if (names && total % names.length !== 0) {
+  if (!allowShortRow && names && total % names.length !== 0) {
     const trimmed = trimTrailingGroupsUntilDivisibleWithRemainder(
       { groups, groupLabels, groupLabelEls, groupLeadingBreaks, groupPrecededByText },
       names.length,
@@ -2555,7 +2556,7 @@ export function parseGrid(container: Element, excludeImgs: Set<HTMLImageElement>
       total = groups.flat().length;
     }
   }
-  if (names && total % names.length !== 0 && hasInlineImageFormattingWrapper(container)) {
+  if (!allowShortRow && names && total % names.length !== 0 && hasInlineImageFormattingWrapper(container)) {
     collected = trimTrailingGroupsUntilDivisible(
       { groups, groupLabels, groupLabelEls, groupLeadingBreaks, groupPrecededByText },
       names.length,
@@ -2605,7 +2606,7 @@ export function parseGrid(container: Element, excludeImgs: Set<HTMLImageElement>
   );
   if ((!names || isGenericSourceNames(names)) && ambiguousGallery) return withTrailing(ambiguousGallery);
 
-  const shaped = reshapeGrid(groups, groups.flat(), names);
+  const shaped = reshapeGrid(groups, groups.flat(), names, allowShortRow);
   if (!shaped) {
     // Torrent-page gallery fallback (owner ruling, Holubice 838405): the block
     // looked like a comparison (a vs/| title) but the only title was an

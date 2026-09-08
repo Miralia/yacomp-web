@@ -28,8 +28,8 @@ export interface Grid {
   initialRow?: number;
   initialCol?: number;
   initialZoom?: GridInitialZoom | null;
-  // Legacy/manual partial-grid support. Parsed title-derived grids now split a
-  // short final row into a separate gallery before reaching the viewer.
+  // Legacy/manual drop-the-odd-shot picker. Automatic comparisons can have a
+  // short final row without this flag when the author kept the images together.
   partial?: boolean;
   // A single-column "viewer" rather than a comparison: a torrent-page image
   // block whose only candidate title was an unreliable quote/URL blob, so we

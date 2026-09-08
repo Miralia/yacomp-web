@@ -31,6 +31,8 @@ install the latest release](https://github.com/daylinear74/yacomp/releases/lates
   On torrent and offer descriptions, the adjacent **⇄** button switches to a generic
   Viewer when the detected titles are wrong, and switches back to the original
   comparison. The Viewer column choice is retained and also governs image clicks.
+  An uninterrupted image run stays together even when the detected column count
+  leaves a short final row; column arithmetic alone never creates a separate group.
   Other screenshot groups get a compact **Show Viewer** control placed directly
   above the image run, and image clicks open the same gallery viewer by default.
   If a block is ambiguous, **Show Viewer** includes a column-count dropdown:

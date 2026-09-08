@@ -365,7 +365,7 @@ test("hdbits: rerun leaves native clicks intact for images no longer recognized"
   await expect(page.locator("._scf_comp")).toHaveCount(0);
 });
 
-test("hdbits: indivisible comparison-thread OP partitions its trailing shot (80402)", async ({ page }) => {
+test("hdbits: indivisible comparison-thread OP keeps its uninterrupted trailing shot (80402)", async ({ page }) => {
   await stubHdbitsImages(page);
   await page.goto("/hdbits/case/113-iconic-80402");
   await page.waitForFunction(
@@ -373,13 +373,14 @@ test("hdbits: indivisible comparison-thread OP partitions its trailing shot (804
     undefined,
     { timeout: 5000 },
   );
-  // 37 shots, 2-wide AUS/GBR (from the H1) → 36 named comparison shots and a
-  // separate one-shot viewer, following the same title-derived partition rule.
+  // The author put all 37 shots in one continuous run, so the 2-wide AUS/GBR
+  // comparison keeps its last shot in a short nineteenth row.
   await expect(comparisonLinks(page)).toHaveCount(1);
-  await expect(viewerLinks(page)).toHaveCount(1);
+  await expect(viewerLinks(page)).toHaveCount(0);
   await comparisonLinks(page).click();
   await expect(page.locator("._scf_comp")).toBeVisible();
-  await expect(page.locator("._scf_comp_row")).toHaveCount(18);
+  await expect(page.locator("._scf_comp_row")).toHaveCount(19);
+  await expect(page.locator("._scf_comp_img")).toHaveCount(37);
   const names = (await page.locator("._scf_comp_label_item").allTextContents())
     .map((text) => text.replace(/^\d+\.\s*/, "").trim())
     .filter(Boolean);
@@ -388,7 +389,8 @@ test("hdbits: indivisible comparison-thread OP partitions its trailing shot (804
   await page.keyboard.press("Escape");
   await page.locator('img[src*="g37"]').click();
   await expect(page.locator("._scf_comp")).toBeVisible();
-  await expect(page.locator("._scf_comp_row")).toHaveCount(1);
+  await expect(page.locator("._scf_comp_row")).toHaveCount(19);
+  await expect(page.locator("._scf_row_nav_item._scf_active")).toHaveText("19");
 });
 
 test("hdbits: ambiguous torrent gallery gets Show Viewer and opens as 1-wide from image click (Holubice 838405)", async ({ page }) => {
@@ -826,6 +828,80 @@ test("hdbits: Dariush trailing screenshots get Show Viewer and open from image c
   await page.locator('img[src*="g162x"]').click();
   await expect(page.locator("._scf_comp")).toBeVisible();
   await expect(page.locator("._scf_comp_row")).toHaveCount(2);
+});
+
+test("hdbits: uninterrupted four-image run stays whole in comparison and Viewer modes", async ({ page }) => {
+  await stubHdbitsImages(page);
+  await page.goto("/hdbits/case/211-torrent-desc-uninterrupted-four-images");
+  await waitForHdbitsReady(page);
+  await expect(comparisonLinks(page)).toHaveCount(1);
+  await expect(viewerLinks(page)).toHaveCount(0);
+  await expect(viewerSwitches(page)).toHaveCount(1);
+  await comparisonLinks(page).click();
+  await expect(page.locator("._scf_comp_label_item")).toHaveCount(3);
+  await expect.poll(() => page.locator("._scf_comp_row").evaluateAll((rows) => rows.map((row) => row.querySelectorAll("._scf_comp_img").length)))
+    .toEqual([3, 1]);
+  await expect(page.locator("._scf_orphan_select")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await page.locator('img[src$="/g211d.jpg"]').click();
+  await expect(page.locator("._scf_comp_row")).toHaveCount(2);
+  await expect(page.locator("._scf_row_nav_item._scf_active")).toHaveText("2");
+  await page.keyboard.press("Escape");
+
+  await viewerSwitches(page).click();
+  await expect(viewerLinks(page)).toHaveCount(1);
+  await expect(page.locator("select._scf_column_select option")).toHaveCount(4);
+  await viewerLinks(page).click();
+  await expect(page.locator("._scf_comp_row")).toHaveCount(4);
+  await page.keyboard.press("Escape");
+  await page.locator("select._scf_column_select").selectOption("2");
+  await page.locator('img[src$="/g211d.jpg"]').click();
+  await expect(page.locator("._scf_comp_row")).toHaveCount(2);
+  await expect(page.locator("._scf_comp_label_item", { hasText: "Source 2" })).toHaveCSS("opacity", "1");
+  await page.keyboard.press("Escape");
+  await viewerSwitches(page).click();
+  await expect(comparisonLinks(page)).toHaveCount(1);
+  await expect(viewerLinks(page)).toHaveCount(0);
+  await comparisonLinks(page).click();
+  await expect.poll(() => page.locator("._scf_comp_row").evaluateAll((rows) => rows.map((row) => row.querySelectorAll("._scf_comp_img").length)))
+    .toEqual([3, 1]);
+});
+
+test("hdbits: slow.pics remainder splitting respects DOM run boundaries", async ({ page }) => {
+  await stubHdbitsImages(page);
+  await page.goto("/hdbits/case/211-torrent-desc-uninterrupted-four-images");
+  await waitForHdbitsReady(page);
+  const results = await page.evaluate(() => {
+    const api = (window as unknown as { __yacomp: {
+      buildRescueGridPartition: (images: HTMLImageElement[], info: { names: string[]; numCols: number; imageUrls: string[] }) => {
+        comparison: { rows: unknown[][] }; remainder: { rows: unknown[][] } | null;
+      };
+    } }).__yacomp;
+    const image = (id: number) => `<img src="https://t.hdbits.org/boundary${id}.jpg">`;
+    const anchor = (id: number) => `<a href="https://img.hdbits.org/boundary${id}">${image(id)}</a>`;
+    const first = [1, 2, 3].map(anchor).join("");
+    const cases = [
+      { name: "adjacent", html: first + anchor(4), split: false },
+      { name: "whitespace", html: first + " \n &nbsp; " + anchor(4), split: false },
+      { name: "comment", html: first + "<!-- not a visual boundary -->" + anchor(4), split: false },
+      { name: "inline wrappers", html: first + `<span><strong>${anchor(4)}</strong></span>`, split: false },
+      { name: "shared anchor", html: `<a href="#">${[1, 2, 3, 4].map(image).join("")}</a>`, split: false },
+      { name: "line break", html: first + "<br>" + anchor(4), split: true },
+      { name: "paragraph", html: first + `<p>${anchor(4)}</p>`, split: true },
+      { name: "block wrapper", html: first + `<div>${anchor(4)}</div>`, split: true },
+      { name: "prose", html: first + "Separate screenshot: " + anchor(4), split: true },
+    ];
+    return cases.map(({ name, html, split }) => {
+      const host = document.createElement("div");
+      host.innerHTML = html;
+      const result = api.buildRescueGridPartition([...host.querySelectorAll("img")], { names: ["A", "B", "C"], numCols: 3, imageUrls: [] });
+      return { name, split, rows: result.comparison.rows.map((row) => row.length), remainder: result.remainder?.rows.flat().length ?? 0 };
+    });
+  });
+  for (const result of results) {
+    expect(result.rows, result.name).toEqual(result.split ? [3] : [3, 1]);
+    expect(result.remainder, result.name).toBe(result.split ? 1 : 0);
+  }
 });
 
 test("hdbits: title-derived remainder partitions even without a large visual gap", async ({ page }) => {

@@ -40,8 +40,8 @@ Everything else (source, tests, iconic fixtures, templates, rulings) is in git.
 - `src/sites/hdbits.ts` — `setupHDBitsCore()`: slow.pics collection, `getGrids`,
   link insertion, the slow.pics rescue, forum manual custom comparison, and the
   click dispatch (`grid.gallery` → "Show viewer" 1-wide; else the normal
-  comparison). The legacy `grid.partial` picker remains available but parser
-  partitions title-derived remainders before dispatch.
+  comparison). The legacy `grid.partial` picker remains available; automatic
+  partitions require a markup boundary and uninterrupted runs keep short rows.
 - `src/viewer/` — `comparison.ts` (inline viewer), `row.ts`, and
   `orphan-select.ts` (the drop-odd-shot thumbnail picker).
 

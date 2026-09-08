@@ -82,7 +82,7 @@ describe("buildRescueGridPartition", () => {
     ]);
     expect(partition.remainder).toBeNull();
   });
-  test("keeps a non-divisible tail as a separate gallery", () => {
+  test("keeps the conservative tail split when DOM continuity is unavailable", () => {
     const partition = buildRescueGridPartition(["a", "b", "c", "d"].map(mockImg), info)!;
     expect(partition.comparison.rows).toHaveLength(1);
     expect(partition.comparison.rows[0]).toHaveLength(3);

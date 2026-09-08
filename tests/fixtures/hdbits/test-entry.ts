@@ -12,6 +12,7 @@
 // time.
 
 import { setupHDBitsCore } from "../../../src/sites/hdbits";
+import { buildRescueGridPartition } from "../../../src/sites/hdbits-slowpics";
 import { setupKeyboard } from "../../../src/keyboard";
 import { saveConfig, getConfig, resetConfig } from "../../../src/config";
 
@@ -67,6 +68,7 @@ function run(): void {
     getConfig,
     resetConfig,
     rerunHDBits: setupHDBitsCore,
+    buildRescueGridPartition,
   };
   (window as unknown as { __yacomp_test_ready: boolean }).__yacomp_test_ready = true;
 }

@@ -9,7 +9,7 @@
 
 import type { Grid, GridCell } from "../grid";
 import { hdbFull } from "../grid/parser";
-import { partitionTrailingRemainder } from "../grid/partition";
+import { partitionImageRun } from "../grid/partition";
 import { slowPicsKeyFromAnchor, type SlowPicsGridInfo } from "./slowpics-source";
 
 export interface SlowPicsComparison {
@@ -98,8 +98,8 @@ export interface RescueGridPartition {
 }
 
 /** Reshape rescued HDBits thumbnails using slow.pics' column count and titles.
- *  Complete rows form the named comparison; a trailing non-divisible group is
- *  preserved as a separate one-column gallery instead of invalidating both. */
+ *  Uninterrupted runs stay whole; only an authored boundary allows a trailing
+ *  non-divisible group to become a separate one-column gallery. */
 export function buildRescueGridPartition(
   images: HTMLImageElement[],
   info: SlowPicsGridInfo,
@@ -113,11 +113,11 @@ export function buildRescueGridPartition(
     img,
     a: img.closest("a") as HTMLAnchorElement | undefined,
   }));
-  const partition = partitionTrailingRemainder(cells, numCols);
-  if (partition.complete.length < numCols) return null;
+  const partition = partitionImageRun(cells, numCols);
+  if (partition.comparison.length < numCols) return null;
   const rows: GridCell[][] = [];
-  for (let i = 0; i < partition.complete.length; i += numCols) {
-    rows.push(partition.complete.slice(i, i + numCols));
+  for (let i = 0; i < partition.comparison.length; i += numCols) {
+    rows.push(partition.comparison.slice(i, i + numCols));
   }
   const remainder = partition.remainder.length
     ? {
