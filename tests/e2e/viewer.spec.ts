@@ -1919,9 +1919,18 @@ test("closing the viewer cancels the pending background-load kickoff", async ({ 
     page.evaluate(
       () => (window as unknown as { __cells: HTMLImageElement[] }).__cells.filter((i) => i.src).length,
     );
-  const before = await promotedCount();
+  // IntersectionObserver may legitimately promote a row between Playwright
+  // calls. Capture the baseline in Escape's capture phase, immediately before
+  // the viewer closes, rather than counting that pre-close work as a leak.
+  await page.evaluate(() => {
+    document.addEventListener("keydown", () => {
+      const state = window as unknown as { __cells: HTMLImageElement[]; __promotedAtClose: number };
+      state.__promotedAtClose = state.__cells.filter((image) => image.src).length;
+    }, { capture: true, once: true });
+  });
   await page.keyboard.press("Escape");
   await expect(page.locator("._scf_comp")).not.toBeVisible();
+  const before = await page.evaluate(() => (window as unknown as { __promotedAtClose: number }).__promotedAtClose);
 
   // Outlive both kickoff timers (200 ms post-sizer-load and the 3 s net).
   await page.waitForTimeout(3600);
