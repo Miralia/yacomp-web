@@ -15,6 +15,7 @@ import {
   isHDBitsThumbUrl, isHDBitsImagePageUrl,
 } from "./screenshot-urls";
 import { partitionImageRun } from "./partition";
+import { descriptionImageContainers } from "./description";
 import { genericSourceNames } from "../util";
 
 // Re-exported from names.ts (moved there so name strategies can guard with it).
@@ -2622,13 +2623,18 @@ export function parseGrid(container: Element, excludeImgs: Set<HTMLImageElement>
     return withTrailing(torrentViewerGalleryFallback(container, { groups, groupLabels, groupLabelEls, groupLeadingBreaks, groupPrecededByText }) ?? cmpThreadLargestBlock(container, groups));
   }
 
-  // Fallback: match strong count to numCols
+  // Last-resort labels must belong to the description, not merely share an
+  // ancestor table with its screenshots. Request fields can coincidentally
+  // supply exactly as many bold values as there are image columns.
   if (!names) {
+    const description = descriptionImageContainers().find((root) => root.contains(container));
     let el: Element | null = container;
     for (let up = 0; up < 5 && el; up++, el = el.parentElement) {
+      if (description && !description.contains(el)) break;
       const strongs = el.querySelectorAll("strong");
       if (!strongs.length) continue;
       const candidates = [...strongs]
+        .filter((s) => !isHDBitsRequestsMetadataElement(s))
         .map((s) => s.textContent!.trim())
         .filter((t) =>
           t &&

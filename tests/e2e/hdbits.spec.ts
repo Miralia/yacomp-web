@@ -784,6 +784,58 @@ test("hdbits: shared image links open only the clicked image and fallback stops 
   await expect(page.locator("._scf_comp")).toHaveCount(0);
 });
 
+for (const variant of ["below", "above", "outside-without-request-class", "inside"] as const) {
+  test(`hdbits: matching page metadata never titles an uncaptioned gallery (${variant})`, async ({ page }) => {
+    await stubHdbitsImages(page);
+    const body = caseBody("212-torrent-desc-matching-requests-metadata.html");
+    const split = body.indexOf('<div id="request-metadata">');
+    const screenshots = body.slice(0, split);
+    const metadata = variant === "outside-without-request-class"
+      ? body.slice(split).replace("main table_requests", "main")
+      : body.slice(split);
+    let html = renderTorrentWithComment(variant === "inside" ? body : screenshots, "");
+    if (variant !== "inside") {
+      const marker = variant === "above"
+        ? '<tr><td><div class="label">Tags</div></td></tr>'
+        : '<tr><td><div class="label">Other copies of this film</div></td></tr>';
+      html = html.replace(marker, `<tr><td>${metadata}</td></tr>${marker}`);
+    }
+    await page.route("**/hdbits/case/_metadata-scope", (route) => route.fulfill({ contentType: "text/html", body: html }));
+    await page.goto("/hdbits/case/_metadata-scope");
+    await waitForHdbitsReady(page);
+    await expect(comparisonLinks(page)).toHaveCount(0);
+    await expect(viewerLinks(page)).toHaveCount(1);
+    await expect(page.locator("select._scf_column_select option")).toHaveCount(6);
+    await viewerLinks(page).click();
+    await expect(page.locator("._scf_comp_row")).toHaveCount(6);
+    await page.keyboard.press("Escape");
+    await page.locator("select._scf_column_select").selectOption("3");
+    await page.locator('img[src$="/g212f.jpg"]').click();
+    await expect(page.locator("._scf_comp_row")).toHaveCount(2);
+    await expect(page.locator("._scf_comp_img")).toHaveCount(6);
+    await expect(page.locator("._scf_comp_label_item", { hasText: "Source 3" })).toHaveCSS("opacity", "1");
+  });
+}
+
+test("hdbits: local parent captions survive description-scoped fallback", async ({ page }) => {
+  await stubHdbitsImages(page);
+  const body = caseBody("212-torrent-desc-matching-requests-metadata.html");
+  const split = body.indexOf('<div id="request-metadata">');
+  const description = `<div><strong>Source</strong> <strong>Encode</strong> <strong>1080p</strong></div><table><tbody><tr><td>${body.slice(0, split)}</td></tr></tbody></table>`;
+  const marker = '<tr><td><div class="label">Other copies of this film</div></td></tr>';
+  const html = renderTorrentWithComment(description, "").replace(marker, `<tr><td>${body.slice(split)}</td></tr>${marker}`);
+  await page.route("**/hdbits/case/_local-parent-captions", (route) => route.fulfill({ contentType: "text/html", body: html }));
+  await page.goto("/hdbits/case/_local-parent-captions");
+  await waitForHdbitsReady(page);
+  await expect(comparisonLinks(page)).toHaveCount(1);
+  expect(await readGridNames(page, 0)).toEqual(["Source", "Encode", "1080p"]);
+  await viewerSwitches(page).click();
+  await expect(viewerLinks(page)).toHaveCount(1);
+  await expect(page.locator("select._scf_column_select option")).toHaveCount(6);
+  await viewerSwitches(page).click();
+  expect(await readGridNames(page, 0)).toEqual(["Source", "Encode", "1080p"]);
+});
+
 test("hdbits: technical doc labels before a torrent gallery are not source columns", async ({ page }) => {
   await stubHdbitsImages(page);
   await page.goto("/hdbits/case/180-torrent-desc-killshot-bdinfo-eac3to-gallery");

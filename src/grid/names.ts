@@ -6,6 +6,7 @@ import {
   NON_SCREENSHOT_IMG_RE, HDBITS_THUMB_RE, HDBITS_IMAGE_PAGE_RE,
   EXTERNAL_SCREENSHOT_HOST_RE, DIRECT_IMAGE_URL_RE, urlHost,
 } from "./screenshot-urls";
+import { descriptionImageContainers } from "./description";
 
 // Reject pipe/vs splits that look like metadata (years, runtimes, dates)
 const META_RE = /^(\d{4}|\d+\s*min(?:\/[a-z]+)?|[a-z]{3,9}\s+\d{1,2},?\s*\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})$/i;
@@ -874,8 +875,10 @@ export function namesFromLeadingBoldTags(container: Element): string[] | null {
 
 /** Strategy 3: bold tags in ancestor elements */
 export function namesFromAncestors(container: Element): string[] | null {
+  const description = descriptionImageContainers().find((root) => root.contains(container));
   let el: Element | null = container;
   for (let up = 0; up < 8 && el; up++, el = el.parentElement) {
+    if (description && !description.contains(el)) break;
     const tags = [...el.querySelectorAll("strong, b")]
       .filter((tag) => !isHDBitsRequestsMetadataElement(tag));
     if (tags.length) {
