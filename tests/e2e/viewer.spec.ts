@@ -106,6 +106,9 @@ test("loading spinner stays at viewport center for a narrow left-aligned source"
   });
   try {
     await page.goto("/", { waitUntil: "domcontentloaded" });
+    // The sweep below is a hover-to-switch assertion; the Web build ships that
+    // opt-in, so enable it explicitly instead of relying on the default.
+    await setConfig(page, { mouseSwitch: true });
     await page.click("#open-viewer");
 
     const comp = page.locator("._scf_comp");
@@ -2263,6 +2266,9 @@ test("source banner and hover columns end before the comparison scrollbar gutter
     (window as unknown as { __yacomp: YacompTestHooks }).__yacomp.saveConfig({
       uiChromeMode: "always",
       sourceTitleLayout: "filled",
+      // The hover column asserted below only exists while pointer-driven
+      // switching is on, which the Web build does not enable by default.
+      mouseSwitch: true,
     });
     (window as unknown as { collection: unknown }).collection = {
       comparisons: [{
