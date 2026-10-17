@@ -6,6 +6,7 @@ import {
   NON_SCREENSHOT_IMG_RE, HDBITS_THUMB_RE, HDBITS_IMAGE_PAGE_RE,
   EXTERNAL_SCREENSHOT_HOST_RE, DIRECT_IMAGE_URL_RE, urlHost,
 } from "./screenshot-urls";
+import { descriptionImageContainers } from "./description";
 
 // Reject pipe/vs splits that look like metadata (years, runtimes, dates)
 const META_RE = /^(\d{4}|\d+\s*min(?:\/[a-z]+)?|[a-z]{3,9}\s+\d{1,2},?\s*\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})$/i;
@@ -306,6 +307,15 @@ function stackedBitrateTitleNames(text: string): string[] | null {
   return null;
 }
 
+// A bullet-list item ("- English SDH subtitles", "• Audio commentary with …").
+// Notes lists sit right above the screenshots on plenty of descriptions, and a
+// bullet that happens to enumerate people or extras with commas would otherwise
+// split into "column titles" that divide the shot count by accident (849948).
+// A bullet is body text, not a heading — unless it still carries an EXPLICIT
+// vs/| comparison separator, where the line really is a titled comparison that
+// the poster merely bulleted.
+const BULLET_LINE_RE = /^[-–—•*+]\s+\S/;
+
 /** THE column-title predicate (MODEL.md). Turn one candidate line into validated
  *  column titles, or null. This is the single place that answers "is this a real
  *  comparison title?" — short, has an explicit separator, splits into
@@ -326,6 +336,7 @@ export function asColumnTitles(text: string): string[] | null {
   if (stacked) return stacked;
   const t = columnTitleCandidateText(raw).trim();
   if (!t) return null;
+  if (BULLET_LINE_RE.test(t) && !hasExplicitComparison(t)) return null;
   // Whole-line prose check BEFORE splitting: when the separator is a comma,
   // splitting removes the comma-connector signal from each part, so the
   // per-part check below would miss it (0117). Mask the "v."/"vs." separator
@@ -864,8 +875,10 @@ export function namesFromLeadingBoldTags(container: Element): string[] | null {
 
 /** Strategy 3: bold tags in ancestor elements */
 export function namesFromAncestors(container: Element): string[] | null {
+  const description = descriptionImageContainers().find((root) => root.contains(container));
   let el: Element | null = container;
   for (let up = 0; up < 8 && el; up++, el = el.parentElement) {
+    if (description && !description.contains(el)) break;
     const tags = [...el.querySelectorAll("strong, b")]
       .filter((tag) => !isHDBitsRequestsMetadataElement(tag));
     if (tags.length) {
@@ -940,10 +953,40 @@ export function isOriginalPost(container: Element): boolean {
   return first === container || first.contains(container) || container.contains(first);
 }
 
-export function findComparisonNames(container: Element): string[] | null {
+/** Prefer an original post's explicit topic title when it describes more
+ *  columns than a weak local candidate. `availableImages >= topic.length`
+ *  deliberately allows the parser's complete-rows + trailing-remainder rule. */
+export function widerOriginalPostHeading(
+  container: Element,
+  localNames: string[],
+  availableImages: number,
+): string[] | null {
+  if (!isOriginalPost(container)) return null;
+  const topic = namesFromHeadings();
+  return topic && topic.length > localNames.length && availableImages >= topic.length ? topic : null;
+}
+
+export function findComparisonNames(container: Element, availableImages?: number): string[] | null {
+  const sibling = namesFromSiblings(container);
+  if (sibling) return sibling;
+
+  const leading = namesFromLeadingText(container);
+  if (leading) {
+    // A loose leading line is close to the screenshots, but it can merely be
+    // source-provenance prose whose commas happen to parse as columns (82313:
+    // "Blu-ray is from …, AMZN from …"). When the original post's explicit
+    // topic title names MORE columns and the image run is large enough to use
+    // them, prefer that wider title. The grid parser only supplies the image
+    // count for a post without competing local section titles; structured
+    // sibling/group labels keep their existing higher precedence.
+    const topic = availableImages === undefined
+      ? null
+      : widerOriginalPostHeading(container, leading, availableImages);
+    if (topic) return topic;
+    return leading;
+  }
+
   return (
-    namesFromSiblings(container) ||
-    namesFromLeadingText(container) ||
     namesFromColorSpans(container) ||
     namesFromLeadingBoldTags(container) ||
     namesFromAncestors(container) ||

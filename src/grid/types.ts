@@ -28,10 +28,8 @@ export interface Grid {
   initialRow?: number;
   initialCol?: number;
   initialZoom?: GridInitialZoom | null;
-  // The final row is short (fewer than numCols cells) because the count is
-  // indivisible — a comparison-thread OP that dropped a screenshot (80402).
-  // The viewer renders the lone trailing "orphan" cell with a click-to-ignore
-  // affordance so the rest of the grid still pairs up cleanly.
+  // Legacy/manual drop-the-odd-shot picker. Automatic comparisons can have a
+  // short final row without this flag when the author kept the images together.
   partial?: boolean;
   // A single-column "viewer" rather than a comparison: a torrent-page image
   // block whose only candidate title was an unreliable quote/URL blob, so we

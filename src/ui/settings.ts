@@ -3,7 +3,7 @@
 // ╚═══════════════════════════════════════════════════════════════════════════╝
 
 import {
-  getConfig, saveConfig, resetConfig, DEFAULTS,
+  getConfig, saveConfig, resetConfig,
   type YacompConfig,
   SITE_KEYS, SITE_LABELS, type SiteKey,
   FILTER_MODE_IDS, type FilterModeId,
@@ -148,6 +148,17 @@ const GROUPS: SettingGroup[] = [
         key: "mouseSwitch",
         label: "Mouse switch",
         tooltip: "When on, moving the cursor across a row switches the visible source by horizontal position.",
+      },
+      {
+        type: "radio",
+        key: "sourceTitleLayout",
+        label: "Title layout",
+        tooltip: "Dense keeps all source titles centered together at the top. Filled gives every visible source an equal-width column aligned with mouse switching; each title block is centered while its text stays left-aligned.",
+        options: [
+          { label: "Dense", value: "dense" },
+          { label: "Filled", value: "filled" },
+        ],
+        onSave: () => { for (const c of activeComps) c.updateTitleLayout?.(); },
       },
       {
         type: "radio",
@@ -885,6 +896,7 @@ function applyImportedConfig(renderers: Renderer[]): void {
     c.syncAutoHide?.();
     c.updateFillCanvasBtn?.();
     c.updateSourceMenu?.();
+    c.updateTitleLayout?.();
   }
   refreshPTPGridToggles();
 }
@@ -1058,7 +1070,10 @@ export function openSettings(): void {
   resetBtn.textContent = "Reset Defaults";
   resetBtn.addEventListener("click", () => {
     resetConfig();
-    for (const c of activeComps) c.updateCloseBtn?.();
+    for (const c of activeComps) {
+      c.updateCloseBtn?.();
+      c.updateTitleLayout?.();
+    }
     for (const r of renderers) r();
   });
 

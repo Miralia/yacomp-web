@@ -28,7 +28,7 @@ viewer.close();
 `yacomp-web` tracks stable upstream yacomp releases through an automated pull
 request. Web-only changes remain in this repository and are not proposed back
 to upstream. Release versions mirror the upstream base and add a Web revision,
-for example `5.9.5-web.1`.
+for example `5.9.6-web.1`.
 
 yacomp gives comparison pages a consistent fullscreen viewer across different
 sites: hover to switch sources, navigate rows from the keyboard, zoom and pan,
@@ -50,11 +50,21 @@ or [Violentmonkey](https://violentmonkey.github.io/), then **[click here to
 install the latest release](https://github.com/daylinear74/yacomp/releases/latest/download/yacomp.user.js)**.
 
 - On HDB torrent and offer pages, detected comparison grids get a **Show comparison** link.
+  On torrent and offer descriptions, the adjacent **⇄** button switches to a generic
+  Viewer when the detected titles are wrong, and switches back to the original
+  comparison. The Viewer column choice is retained and also governs image clicks.
+  An uninterrupted image run stays together even when the detected column count
+  leaves a short final row; column arithmetic alone never creates a separate group.
   Other screenshot groups get a compact **Show Viewer** control placed directly
   above the image run, and image clicks open the same gallery viewer by default.
   If a block is ambiguous, **Show Viewer** includes a column-count dropdown:
   `1` opens it as a gallery, while `2+` builds a manual comparison; a
   non-divisible image count leaves the final row short.
+  Images missed by comparison detection get separate fallback viewers, including
+  standalone posters and diagrams. Description-image clicks also cover unlinked
+  and dynamically added images; existing comparison openers and the native-click
+  preference are preserved. Inline images remain clickable without adding controls
+  inside prose or technical logs. This fallback excludes page chrome and comments.
 - On HDB forum pages it also adds a **Custom comparison** builder below the page
   title, for markup too irregular to auto-detect safely (see *Features*).
 - On native-viewer sites, use the site's comparison UI as usual; yacomp takes
@@ -83,8 +93,10 @@ install the latest release](https://github.com/daylinear74/yacomp/releases/lates
 - **Per-source adjustments** — brightness, contrast, and gamma-mismatch checks
   (sRGB ↔ BT.1886, the 0.88 AE/QuickTime fix, Legacy Mac) for the selected
   source only.
-- **Colorspace-aware luma/chroma** — BT.709 / BT.2020 handling from URL hints or
-  PNG/JPEG ICC profile data when available.
+- **Colorspace-aware luma/chroma previews** — structured PNG color metadata and
+  PNG/JPEG/WebP ICC profiles take precedence over filename hints. Unknown or
+  unavailable metadata uses the 709 preview. Metadata reads are bounded and
+  temporary failures are retried after a short backoff.
 - **Custom comparison builder** (HDB forums) — when markup is too irregular for
   safe auto-detection, build a comparison by hand. Click or drag across
   screenshots to select a gallery (`Shift` to extend, `Ctrl`/`⌘`-click to toggle
@@ -105,10 +117,17 @@ install the latest release](https://github.com/daylinear74/yacomp/releases/lates
 - **Lazy loading** — rows load on demand, with optional background loading and
   automatic syncing for dynamically added (lazy / SPA) images.
 
-> **Chrome / Edge note:** a browser GPU bug can render the visual filters
-> slightly off (filtered images look a touch dark). To avoid it for now, disable
-> hardware acceleration — *Settings → System → "Use graphics acceleration when
-> available"* → off, then relaunch.
+Filters analyze the browser's displayed RGB image. They are visual aids, not
+reconstruction of the original video's HDR transfer function or YUV planes.
+Gamma presets apply a luma-based power adjustment in normalized display RGB;
+their names describe comparison heuristics, not exact color-space conversions.
+Browser color management, scaling, and GPU precision can affect the result.
+While metadata is loading, the selected luma/chroma preview uses cached
+colorimetry or a provisional 709 matrix, then updates when metadata is available.
+
+Some Chrome/Edge GPU configurations have produced darker filtered output. If
+you encounter that discrepancy, compare with graphics acceleration disabled
+and relaunch the browser.
 
 ## Shortcuts
 
@@ -162,6 +181,10 @@ Settings persist via `GM_setValue` and are scoped per userscript manager.
 - **Hover to switch source** — when on, moving the cursor across a row switches
   the visible source by horizontal position; when off, switching needs the
   keyboard or source menu. Default on.
+- **Title layout** (`Dense` / `Filled`) — `Dense` centers the source titles
+  together at the top. `Filled` gives every visible source an equal-width title
+  column aligned with the mouse-switch regions, while keeping each title's text
+  left-aligned inside its centered block. Default `Dense`.
 - **Close button position** (`Auto` / `Left` / `Right`) — `Auto` places it on the
   left on macOS and on the right elsewhere, matching native window controls.
 

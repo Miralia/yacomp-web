@@ -52,6 +52,20 @@ describe("reshapeGrid", () => {
     expect(reshapeGrid(groups, groups.flat(), ["X", "Y"])).toBeNull();
   });
 
+  test("keeps every image in a short last row when explicitly preserving an uninterrupted run", () => {
+    const groups = [[cell("a"), cell("b"), cell("c"), cell("d")]];
+    const result = reshapeGrid(groups, groups.flat(), ["A", "B", "C"], true)!;
+    expect(result.numCols).toBe(3);
+    expect(fulls(result.gridRows)).toEqual([["a", "b", "c"], ["d"]]);
+  });
+
+  test("preserves row-major order when a short last row overrides authored display columns", () => {
+    const groups = [[cell("a"), cell("b")], [cell("c"), cell("d")]];
+    const result = reshapeGrid(groups, groups.flat(), ["A", "B", "C"], true)!;
+    expect(result.numCols).toBe(3);
+    expect(fulls(result.gridRows)).toEqual([["a", "b", "c"], ["d"]]);
+  });
+
   test("returns null for a ragged group list with no names", () => {
     const groups = [[cell("a")], [cell("b"), cell("c")]];
     expect(reshapeGrid(groups, groups.flat(), null)).toBeNull();

@@ -45,6 +45,12 @@ export interface Comp {
   // Rebuild the source-title banner for the current row+column (per-row names
   // make its content row-dependent). Called wherever currentRow changes.
   updateLabel?: () => void;
+  // Keep the viewport-centered loader in sync with the active row and column.
+  updateLoadingOverlay?: () => void;
+  // Reprioritize pending colorspace work when the visible source/row changes.
+  updateActiveFilter?: () => void;
+  // Rebuild the banner after the dense/filled title-layout setting changes.
+  updateTitleLayout?: () => void;
   updateScrollSpacers?: () => void;
   updateNavMap: () => void;
   // Auto-hide chrome hooks (① auto-hide UI). Reveal the source label / row nav

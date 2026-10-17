@@ -10,7 +10,7 @@ import { updateHUD } from "../ui/hud";
 import {
   defaultZoomMode as cfgZoomMode,
   fillCanvasDefault, navMapDefault, bgLoadDefault, lazyLoadMargin,
-  mouseSwitch as cfgMouseSwitch,
+  mouseSwitch as cfgMouseSwitch, sourceTitleLayout as cfgSourceTitleLayout,
 } from "../config";
 import {
   setZoomMode, setZoomWidth,
@@ -21,7 +21,8 @@ import {
   type CapturedZoomAnchor,
 } from "../filters/zoom";
 import { setupDragHandlers } from "./drag";
-import { buildRow, fillRow, loadRow, loadRowColumn } from "./row";
+import { createFilterSyncGuard, syncActiveFilter, syncAll } from "../filters/imaging";
+import { buildRow, fillRow, loadRow, loadRowColumn, setRowLoadingOwner } from "./row";
 import { createNavMap } from "./nav-map";
 import { createRowNav } from "./row-nav";
 import { createSourceMenu } from "./source-menu";
@@ -96,6 +97,8 @@ export function syncCurrentRowFromScroll(
     comp.currentRow = closest;
     updateRowNav(closest);
     comp.updateLabel?.();
+    comp.updateLoadingOverlay?.();
+    comp.updateActiveFilter?.();
   }
 }
 
@@ -109,6 +112,15 @@ export function calcScrollSpacerHeights(
     top: Math.max(0, halfViewport - firstRowHeight / 2),
     bottom: Math.max(0, halfViewport - lastRowHeight / 2),
   };
+}
+
+export function formatLoadingCellLabel(
+  sourceName: string | null | undefined,
+  colIndex: number,
+  rowIndex: number,
+): string {
+  const title = sourceName?.replace(/\s+/g, " ").trim() || `Source ${colIndex + 1}`;
+  return `${title} (C${colIndex + 1}, R${rowIndex + 1})`;
 }
 
 export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLElement): void {
@@ -143,6 +155,14 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
 
   const compDiv = document.createElement("div") as HTMLDivElement;
   compDiv.className = "_scf_comp";
+  const loadingOverlay = document.createElement("div");
+  loadingOverlay.className = "_scf_loading_overlay";
+  loadingOverlay.hidden = true;
+  const loadingSpinner = document.createElement("div");
+  loadingSpinner.className = "_scf_loading_spinner";
+  const loadingCaption = document.createElement("div");
+  loadingCaption.className = "_scf_loading_caption";
+  loadingOverlay.append(loadingSpinner, loadingCaption);
   const wheelZoomGesture: WheelZoomGestureState = { anchor: null, resetTimer: null };
 
   const { drag, onDragMove, onDragEnd } = setupDragHandlers(compDiv);
@@ -183,8 +203,33 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
   bottomSpacer.className = "_scf_scroll_spacer";
   compDiv.appendChild(topSpacer);
 
+  /** The scroll container's content box ends before a classic scrollbar.
+   * `clientWidth` is in CSS pixels, so it already reflects the browser's
+   * scrollbar width at the current DPI and zoom level. */
+  function comparisonViewportWidth(): number {
+    return Math.max(1, compDiv.clientWidth || document.documentElement.clientWidth || window.innerWidth);
+  }
+
   function pointerColumnForEvent(e: MouseEvent): number {
-    return pointerVisibleColumn(e.clientX, window.innerWidth, comp.visibleCols);
+    return pointerVisibleColumn(
+      e.clientX - compDiv.getBoundingClientRect().left,
+      comparisonViewportWidth(),
+      comp.visibleCols,
+    );
+  }
+
+  function loadingLabelFor(rowIndex: number, colIndex: number): string {
+    const names = grid.rowNames?.[rowIndex] ?? grid.names;
+    return formatLoadingCellLabel(names?.[colIndex], colIndex, rowIndex);
+  }
+
+  function syncLoadingOverlay(): void {
+    const rowIndex = Number.isInteger(comp.currentRow) ? comp.currentRow : initialPosition.row;
+    const colIndex = Number.isInteger(comp.currentCol) ? comp.currentCol : initialPosition.col;
+    const rowData = allRowData[rowIndex];
+    const loading = rowData?.rowDiv.classList.contains("_scf_loading") ?? false;
+    loadingOverlay.hidden = !loading;
+    if (loading) loadingCaption.textContent = loadingLabelFor(rowIndex, colIndex);
   }
 
   // The source-title banner. With per-row names (grid.rowNames — slow.pics)
@@ -192,24 +237,104 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
   // as before. Rebuilt on column switches, and on row changes when (and only
   // when) per-row names exist.
   let lastLabelText: string | null = null;
+  let labelViewportWidth = 0;
+
+  function wrappedLineInfo(el: HTMLElement): { lines: number; charsInLastLine: number } {
+    const textNode = el.firstChild;
+    const text = textNode?.textContent || "";
+    if (!textNode || textNode.nodeType !== Node.TEXT_NODE || !text) {
+      return { lines: 0, charsInLastLine: 0 };
+    }
+
+    const range = document.createRange();
+    let lines = 0;
+    let lastTop: number | null = null;
+    let charsInLastLine = 0;
+    for (let start = 0; start < text.length;) {
+      const codePoint = text.codePointAt(start)!;
+      const char = String.fromCodePoint(codePoint);
+      const end = start + char.length;
+      range.setStart(textNode, start);
+      range.setEnd(textNode, end);
+      const rect = range.getClientRects()[0];
+      if (rect && rect.width) {
+        if (lastTop === null || Math.abs(rect.top - lastTop) > 0.5) {
+          lines++;
+          lastTop = rect.top;
+          charsInLastLine = 0;
+        }
+        if (!/\s/u.test(char)) charsInLastLine++;
+      }
+      start = end;
+    }
+    return { lines, charsInLastLine };
+  }
+
+  function unwrappedTextWidth(text: string): number {
+    const measure = document.createElement("span");
+    measure.textContent = text;
+    measure.style.cssText = "position:fixed;visibility:hidden;white-space:nowrap;width:max-content;max-width:none";
+    labelEl!.appendChild(measure);
+    const width = measure.getBoundingClientRect().width;
+    measure.remove();
+    return width;
+  }
+
+  /** Avoid a one- or two-character orphaned second line without shrinking
+   * genuinely long names that benefit from the column-layout wrap. */
+  function compactNearOrphanedColumnLabels(): void {
+    const items = [...labelEl!.querySelectorAll<HTMLElement>("._scf_comp_label_item")];
+    for (const item of items) item.style.fontSize = "";
+
+    for (const item of items) {
+      const index = item.querySelector<HTMLElement>("._scf_comp_label_index");
+      const name = item.querySelector<HTMLElement>("._scf_comp_label_name");
+      if (!index || !name) continue;
+      const { lines, charsInLastLine } = wrappedLineInfo(name);
+      if (lines !== 2 || charsInLastLine > 2) continue;
+
+      const style = getComputedStyle(item);
+      const contentWidth = item.clientWidth -
+        parseFloat(style.paddingLeft) -
+        parseFloat(style.paddingRight);
+      const requiredWidth = index.getBoundingClientRect().width + unwrappedTextWidth(name.textContent || "");
+      if (contentWidth <= 0 || requiredWidth <= contentWidth) continue;
+      const baseFontSize = parseFloat(style.fontSize);
+      item.style.fontSize = `${baseFontSize * Math.max(0, contentWidth - 0.5) / requiredWidth}px`;
+    }
+  }
+
   function buildLabel(col: number): void {
     const names = grid.rowNames?.[comp.currentRow] ?? grid.names ?? [];
     labelEl!.replaceChildren();
+    labelEl!.classList.remove("_scf_comp_label_columns");
+    labelEl!.style.gridTemplateColumns = "";
+    const viewportWidth = comparisonViewportWidth();
+    labelViewportWidth = viewportWidth;
+    labelEl!.style.setProperty("--_scf_comp_viewport_width", `${viewportWidth}px`);
     // Column titles are a comparison affordance. A single-column grid is a
     // gallery viewer — plain images, no source-name banner.
     if (grid.numCols > 1) {
       for (let i = 0; i < comp.visibleCols.length; i++) {
         const visibleCol = comp.visibleCols[i];
         const n = names[visibleCol] ?? "Source " + (visibleCol + 1);
-        const label = (i + 1) + ". " + n;
         const part = document.createElement("span");
-        part.textContent = label;
+        part.className = "_scf_comp_label_item";
+        const index = document.createElement("span");
+        index.className = "_scf_comp_label_index";
+        index.textContent = (i + 1) + ". ";
+        const name = document.createElement("span");
+        name.className = "_scf_comp_label_name";
+        name.textContent = n;
+        part.append(index, name);
         if (visibleCol !== col) part.style.opacity = ".4";
         labelEl!.appendChild(part);
-        if (i < comp.visibleCols.length - 1) {
-          labelEl!.appendChild(document.createTextNode("\u00a0 "));
-        }
       }
+    }
+    if (cfgSourceTitleLayout() === "filled") {
+      labelEl!.classList.add("_scf_comp_label_columns");
+      labelEl!.style.gridTemplateColumns = `repeat(${comp.visibleCols.length}, minmax(0, 1fr))`;
+      compactNearOrphanedColumnLabels();
     }
     // Row navigation can change the names themselves — surface the banner so
     // the change is visible even in auto-hidden chrome. (Column switches only
@@ -221,8 +346,10 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
 
   function switchColumn(col: number) {
     if (!comp.visibleCols.includes(col)) return;
+    const changed = comp.currentCol !== col;
     comp.currentCol = col;
-    for (const rowData of allRowData) {
+    for (let rowIndex = 0; rowIndex < allRowData.length; rowIndex++) {
+      const rowData = allRowData[rowIndex];
       const { rowDiv, imgs, loaded } = rowData;
       // Only promote a deferred src → src in rows the IO has already
       // loaded. Unloaded rows keep their `dataset.src` and pick up the
@@ -241,22 +368,15 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
       });
       // Spinner state only makes sense for rows the user can actually
       // see right now. Unloaded rows still carry the initial
-      // `_scf_loading` class from buildRow; loadRow will clear it when
-      // the sizer lands.
+      // `_scf_loading` class from buildRow; loadRow assigns it to the active
+      // image and clears it when that image settles.
       if (loaded) {
         const activeImg = imgs[col];
-        if (activeImg && activeImg.src && !activeImg.complete) {
-          rowDiv.classList.add("_scf_loading");
-          activeImg.addEventListener("load", () => rowDiv.classList.remove("_scf_loading"), { once: true });
-          // A dead column image never fires `load`; clear the spinner on error
-          // too so switching to a 404 source doesn't leave it spinning.
-          activeImg.addEventListener("error", () => rowDiv.classList.remove("_scf_loading"), { once: true });
-        } else {
-          rowDiv.classList.remove("_scf_loading");
-        }
+        setRowLoadingOwner(rowDiv, activeImg ?? null);
       }
       rowDiv.dataset.col = String(col);
     }
+    syncLoadingOverlay();
     buildLabel(col);
     comp.revealColumnNav?.();
     // Update nav map thumbnail for new column (only when zoomed)
@@ -270,6 +390,7 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
     }
     comp.updateSourceMenu?.();
     updateHUD();
+    if (changed) comp.updateActiveFilter?.();
   }
 
   for (let ri = 0; ri < grid.rows.length; ri++) {
@@ -286,9 +407,7 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
     const rowData = buildRow(
       grid.rows[ri],
       grid.numCols,
-      drag,
-      switchColumn,
-      pointerColumnForEvent,
+      initialPosition.col,
       ri > 0 && ri !== initialPosition.row,
     );
     if (ri === 0 || ri === initialPosition.row) rowData.loaded = true;
@@ -296,6 +415,7 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
     allRowData.push(rowData);
   }
   compDiv.appendChild(bottomSpacer);
+  compDiv.appendChild(loadingOverlay);
 
   // IntersectionObserver: load deferred rows as they enter the viewport
   const rowObserver = new IntersectionObserver((entries) => {
@@ -373,6 +493,17 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
     topSpacer.style.height = spacers.top + "px";
     bottomSpacer.style.height = spacers.bottom + "px";
   };
+  comp.updateTitleLayout = () => buildLabel(comp.currentCol);
+  comp.updateLoadingOverlay = syncLoadingOverlay;
+  comp.updateActiveFilter = () => syncActiveFilter(comp);
+
+  const loadingObserver = new MutationObserver((records) => {
+    const activeRow = allRowData[comp.currentRow]?.rowDiv;
+    if (records.some((record) => record.target === activeRow)) syncLoadingOverlay();
+  });
+  for (const rowData of allRowData) {
+    loadingObserver.observe(rowData.rowDiv, { attributes: true, attributeFilter: ["class"] });
+  }
 
   compDiv.addEventListener("mousemove", (e) => {
     if (drag.active || !cfgMouseSwitch()) return;
@@ -484,9 +615,12 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
 
   comp.setRow = (rowIdx: number) => {
     if (rowIdx < 0 || rowIdx >= comp.numRows) return;
+    const changed = comp.currentRow !== rowIdx;
     comp.currentRow = rowIdx;
     comp.navTargetRow = rowIdx;
     comp.updateLabel?.();
+    comp.updateLoadingOverlay?.();
+    if (changed) comp.updateActiveFilter?.();
     allRowData[rowIdx].rowDiv.scrollIntoView({ behavior: "smooth", block: "center" });
     rowNav.updateRowNav(rowIdx);
     comp.revealRowNav?.();
@@ -501,7 +635,10 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
     navMap.updateNavMap();
   });
 
-  const onResize = () => comp.updateScrollSpacers?.();
+  const onResize = () => {
+    comp.updateScrollSpacers?.();
+    if (comparisonViewportWidth() !== labelViewportWidth) buildLabel(comp.currentCol);
+  };
   let spacerResizeObserver: ResizeObserver | null = null;
   if (typeof ResizeObserver !== "undefined") {
     spacerResizeObserver = new ResizeObserver(onResize);
@@ -516,6 +653,7 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
   // observer's handler to avoid a resize→refit→resize loop.
   const onWindowResize = () => {
     comp.updateScrollSpacers?.();
+    buildLabel(comp.currentCol);
     refit1to1();
   };
   window.addEventListener("resize", onWindowResize);
@@ -529,12 +667,14 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
 
   function closeThis() {
     closed = true;
+    createFilterSyncGuard();
     for (const timer of bgLoadTimers) clearTimeout(timer);
     window.removeEventListener("mousemove", onDragMove);
     window.removeEventListener("mouseup", onDragEnd);
     window.removeEventListener("resize", onWindowResize);
     if (spacerResizeObserver) spacerResizeObserver.disconnect();
     openCenterRO?.disconnect();
+    loadingObserver.disconnect();
 
     rowObserver.disconnect();
     resetWheelZoomGesture(wheelZoomGesture);
@@ -566,7 +706,9 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
     // them so per-column readouts don't float over the host page. The HUD
     // re-renders from the remaining comps (or the page-level filter mode).
     hideToast();
-    updateHUD();
+    // The newly exposed page/remaining viewer must not retain an old effect
+    // after cancelling this viewer's in-flight metadata queue.
+    syncAll();
   }
 
   comp.close = closeThis;
@@ -576,6 +718,10 @@ export function buildComparison(grid: Grid, container: HTMLElement, btn: HTMLEle
   document.body.style.overflow = "hidden";
   shadowRoot.appendChild(compDiv);
   comp.updateScrollSpacers();
+  // The initial label is built before the viewer attaches so it can render
+  // immediately. Rebuild after attachment to pick up this container's actual
+  // content width, including any reserved scrollbar gutter.
+  buildLabel(comp.currentCol);
 
   addComp(comp);
   if (fillCanvasEnabled) applyFillCanvas();

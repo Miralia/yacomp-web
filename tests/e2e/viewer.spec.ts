@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { test, expect } from "./fixtures";
+import { iccChunk, iccProfile, pngHeader } from "../fixtures/color-metadata";
 
 // Stub the slow.pics CDN so the suite is hermetic (no external network).
 // Specific fixture files use production-risk dimensions; the fallback keeps
@@ -21,6 +22,22 @@ function fixtureSvg({ width, height }: { width: number; height: number }): strin
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">` +
     `<rect width="${width}" height="${height}" fill="#3a3a3a"/></svg>`
   );
+}
+
+function requestGate(): {
+  started: Promise<void>;
+  markStarted: () => void;
+  released: Promise<void>;
+  release: () => void;
+} {
+  let markStarted!: () => void;
+  let release!: () => void;
+  return {
+    started: new Promise<void>((resolve) => { markStarted = resolve; }),
+    markStarted: () => markStarted(),
+    released: new Promise<void>((resolve) => { release = resolve; }),
+    release: () => release(),
+  };
 }
 
 async function expectRowCanvasAspectRatio(
@@ -75,6 +92,252 @@ test("fixture page loads and shows comparisons", async ({ page }) => {
 
 test("viewer opens on button click", async ({ page }) => {
   await openViewer(page);
+});
+
+test("loading spinner stays at viewport center for a narrow left-aligned source", async ({ page }) => {
+  let releaseImages!: () => void;
+  const imagesBlocked = new Promise<void>((resolve) => { releaseImages = resolve; });
+  await page.route(/i\.slow\.pics/, async (route) => {
+    await imagesBlocked;
+    await route.fulfill({
+      contentType: "image/svg+xml",
+      body: fixtureSvg(DEFAULT_IMAGE_SIZE),
+    });
+  });
+  try {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.click("#open-viewer");
+
+    const comp = page.locator("._scf_comp");
+    const firstRow = page.locator("._scf_comp_row").first();
+    const spinner = page.locator("._scf_loading_spinner");
+    const caption = page.locator("._scf_loading_caption");
+    await expect(firstRow).toHaveClass(/_scf_loading/);
+    await expect(spinner).toBeVisible();
+    await expect(caption).toHaveText("FRA (C1, R1)");
+
+    // Reproduce the geometry that exposed the bug: a three-source viewer on
+    // its rightmost source, followed by a mouse sweep to the left source while
+    // the image row itself is narrow and pinned to the viewport's left edge.
+    await page.keyboard.press("Digit3");
+    await expect(caption).toHaveText("TWN(Gamma=0 92) (C3, R1)");
+    await firstRow.evaluate((element) => {
+      const row = element as HTMLElement;
+      row.style.width = "320px";
+      row.style.height = "180px";
+      row.style.aspectRatio = "auto";
+      row.style.marginLeft = "0";
+      row.style.marginRight = "auto";
+    });
+    const compBox = await comp.boundingBox();
+    expect(compBox).not.toBeNull();
+    await page.mouse.move(compBox!.x + 10, compBox!.y + compBox!.height / 2);
+    await expect(caption).toHaveText("FRA (C1, R1)");
+
+    const assertViewportCentered = async () => {
+      const spinnerBox = await spinner.boundingBox();
+      const captionBox = await caption.boundingBox();
+      const viewport = page.viewportSize();
+      expect(spinnerBox).not.toBeNull();
+      expect(captionBox).not.toBeNull();
+      expect(viewport).not.toBeNull();
+      expect(Math.abs(spinnerBox!.x + spinnerBox!.width / 2 - viewport!.width / 2))
+        .toBeLessThanOrEqual(1);
+      expect(Math.abs(spinnerBox!.y + spinnerBox!.height / 2 - viewport!.height / 2))
+        .toBeLessThanOrEqual(1);
+      expect(captionBox!.y).toBeGreaterThan(viewport!.height / 2 + 20);
+    };
+    await assertViewportCentered();
+
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await expect(caption).toHaveText("FRA (C1, R4)");
+    await assertViewportCentered();
+  } finally {
+    releaseImages();
+  }
+});
+
+test("loading spinner ignores a stale sizer and prior source after a rapid B to C switch", async ({ page }) => {
+  await page.goto("/");
+
+  const gates = {
+    a: requestGate(),
+    b: requestGate(),
+    c: requestGate(),
+  };
+  await page.route(/owner-race-([abc])\.webp$/, async (route) => {
+    const key = new URL(route.request().url()).pathname.match(/owner-race-([abc])\.webp$/)?.[1] as
+      | keyof typeof gates
+      | undefined;
+    if (!key) return route.abort();
+    const gate = gates[key];
+    gate.markStarted();
+    await gate.released;
+    await route.fulfill({
+      contentType: "image/svg+xml",
+      body: fixtureSvg(DEFAULT_IMAGE_SIZE),
+    });
+  });
+
+  try {
+    await page.evaluate(() => {
+      const images = window.collection!.comparisons[0].images;
+      images[0].publicFileName = "owner-race-a.webp";
+      images[1].publicFileName = "owner-race-b.webp";
+      images[2].publicFileName = "owner-race-c.webp";
+    });
+    await page.click("#open-viewer");
+
+    const row = page.locator("._scf_comp_row").first();
+    const caption = page.locator("._scf_loading_caption");
+    await gates.a.started;
+
+    // The sizer is layout-only once a visible cell has started. Even its
+    // terminal failure must not clear that cell's pending spinner.
+    await row.locator("._scf_comp_sizer").dispatchEvent("error");
+    await expect(row).toHaveClass(/_scf_loading/);
+
+    await page.keyboard.press("Digit2");
+    await gates.b.started;
+    await page.keyboard.press("Digit3");
+    await gates.c.started;
+    await expect(caption).toHaveText("TWN(Gamma=0 92) (C3, R1)");
+
+    // B's terminal error is stale as soon as C owns the row. Its later real
+    // load is stale too; neither completion path may clear C's pending state.
+    await row.locator("._scf_comp_img").nth(1).dispatchEvent("error");
+    await expect(row).toHaveClass(/_scf_loading/);
+
+    // The original sizer and B both finish after C owns the spinner. Neither
+    // stale load may clear C's still-pending state.
+    gates.a.release();
+    gates.b.release();
+    await expect.poll(() => row.evaluate((element) => {
+      const sizer = element.querySelector<HTMLImageElement>("._scf_comp_sizer")!;
+      const images = element.querySelectorAll<HTMLImageElement>("._scf_comp_img");
+      return {
+        sizerLoaded: sizer.complete && sizer.naturalWidth > 0,
+        bLoaded: images[1].complete && images[1].naturalWidth > 0,
+        cPending: !images[2].complete,
+      };
+    })).toEqual({ sizerLoaded: true, bLoaded: true, cPending: true });
+    await expect(row).toHaveClass(/_scf_loading/);
+    await expect(caption).toBeVisible();
+
+    gates.c.release();
+    await expect(row).not.toHaveClass(/_scf_loading/);
+    await expect(caption).toBeHidden();
+  } finally {
+    gates.a.release();
+    gates.b.release();
+    gates.c.release();
+  }
+});
+
+test("HDB fallback stays loading through png and jpg failures until webp loads", async ({ page }) => {
+  await openViewer(page);
+  const jpg = requestGate();
+  const webp = requestGate();
+
+  await page.route(/loading-fallback\.(png|jpg|webp)$/, async (route) => {
+    const ext = new URL(route.request().url()).pathname.split(".").pop();
+    if (ext === "png") return route.fulfill({ status: 404, body: "missing png" });
+    const gate = ext === "jpg" ? jpg : webp;
+    gate.markStarted();
+    await gate.released;
+    if (ext === "jpg") return route.fulfill({ status: 404, body: "missing jpg" });
+    return route.fulfill({
+      contentType: "image/svg+xml",
+      body: fixtureSvg(DEFAULT_IMAGE_SIZE),
+    });
+  });
+
+  try {
+    const row = page.locator("._scf_comp_row").first();
+    await row.locator("._scf_comp_img").nth(1).evaluate((image) => {
+      image.dataset.src = "https://i.hdbits.org/loading-fallback.png";
+    });
+    await page.keyboard.press("Digit2");
+
+    // png has failed and jpg is now the live attempt.
+    await jpg.started;
+    await expect(row).toHaveClass(/_scf_loading/);
+    jpg.release();
+
+    // jpg has failed and webp is now the live attempt.
+    await webp.started;
+    await expect(row).toHaveClass(/_scf_loading/);
+    webp.release();
+
+    await expect(row).not.toHaveClass(/_scf_loading/);
+    await expect.poll(() => row.locator("._scf_comp_img").nth(1).evaluate((element) => {
+      const image = element as HTMLImageElement;
+      return {
+        src: image.src,
+        loaded: image.complete && image.naturalWidth > 0,
+      };
+    })).toEqual({
+      src: "https://i.hdbits.org/loading-fallback.webp",
+      loaded: true,
+    });
+  } finally {
+    jpg.release();
+    webp.release();
+  }
+});
+
+test("HDB fallback settles loading after the final webp failure", async ({ page }) => {
+  await openViewer(page);
+  const attempts: { ext: string; resourceType: string; method: string }[] = [];
+  await page.route(/terminal-fallback\.(png|jpg|webp)$/, async (route) => {
+    attempts.push({
+      ext: new URL(route.request().url()).pathname.split(".").pop()!,
+      resourceType: route.request().resourceType(),
+      method: route.request().method(),
+    });
+    await route.fulfill({ status: 404, body: "missing" });
+  });
+
+  const row = page.locator("._scf_comp_row").first();
+  await row.locator("._scf_comp_img").nth(1).evaluate((element) => {
+    const image = element as HTMLImageElement;
+    const oldSrcs: (string | null)[] = [];
+    new MutationObserver((records) => {
+      oldSrcs.push(...records.map((record) => record.oldValue));
+    }).observe(image, {
+      attributes: true,
+      attributeFilter: ["src"],
+      attributeOldValue: true,
+    });
+    (window as unknown as { __terminalFallbackOldSrcs: (string | null)[] })
+      .__terminalFallbackOldSrcs = oldSrcs;
+    image.dataset.src = "https://i.hdbits.org/terminal-fallback.png";
+  });
+  await page.keyboard.press("Digit2");
+
+  // Other viewer consumers can request the active URL too: in 1:1 mode the
+  // nav-map follows the managed image and may issue a second WebP request.
+  // Assert the managed image's actual src assignments instead of conflating
+  // resource requests with fallback transitions.
+  await expect.poll(() => attempts.map(({ ext }) => ext).filter(
+    (ext, index, all) => all.indexOf(ext) === index,
+  )).toEqual(["png", "jpg", "webp"]);
+  expect(attempts.every(({ resourceType, method }) => resourceType === "image" && method === "GET"))
+    .toBe(true);
+  await expect(row).not.toHaveClass(/_scf_loading/);
+  await expect(row.locator("._scf_comp_img").nth(1)).toHaveAttribute(
+    "src",
+    "https://i.hdbits.org/terminal-fallback.webp",
+  );
+  await expect.poll(() => page.evaluate(() => (
+    window as unknown as { __terminalFallbackOldSrcs: (string | null)[] }
+  ).__terminalFallbackOldSrcs)).toEqual([
+    null,
+    "https://i.hdbits.org/terminal-fallback.png",
+    "https://i.hdbits.org/terminal-fallback.jpg",
+  ]);
 });
 
 test("viewer opens with V shortcut", async ({ page }) => {
@@ -166,12 +429,12 @@ test("column switching with number keys", async ({ page }) => {
   // Assert the active entry moves: a "contains text" check would pass even if
   // switching were broken, since every source is always listed in the label.
   await page.keyboard.press("3");
-  await expect(label.locator("span", { hasText: "3." })).toHaveCSS("opacity", "1");
-  await expect(label.locator("span", { hasText: "1." })).toHaveCSS("opacity", "0.4");
+  await expect(label.locator("._scf_comp_label_item", { hasText: "3." })).toHaveCSS("opacity", "1");
+  await expect(label.locator("._scf_comp_label_item", { hasText: "1." })).toHaveCSS("opacity", "0.4");
 
   await page.keyboard.press("1");
-  await expect(label.locator("span", { hasText: "1." })).toHaveCSS("opacity", "1");
-  await expect(label.locator("span", { hasText: "3." })).toHaveCSS("opacity", "0.4");
+  await expect(label.locator("._scf_comp_label_item", { hasText: "1." })).toHaveCSS("opacity", "1");
+  await expect(label.locator("._scf_comp_label_item", { hasText: "3." })).toHaveCSS("opacity", "0.4");
 });
 
 test("source navigation wraps with arrow keys", async ({ page }) => {
@@ -180,16 +443,16 @@ test("source navigation wraps with arrow keys", async ({ page }) => {
   const label = page.locator("._scf_comp_label");
 
   await page.keyboard.press("ArrowRight");
-  await expect(label.locator("span", { hasText: "2." })).toHaveCSS("opacity", "1");
-  await expect(label.locator("span", { hasText: "1." })).toHaveCSS("opacity", "0.4");
+  await expect(label.locator("._scf_comp_label_item", { hasText: "2." })).toHaveCSS("opacity", "1");
+  await expect(label.locator("._scf_comp_label_item", { hasText: "1." })).toHaveCSS("opacity", "0.4");
 
   await page.keyboard.press("ArrowLeft");
-  await expect(label.locator("span", { hasText: "1." })).toHaveCSS("opacity", "1");
-  await expect(label.locator("span", { hasText: "2." })).toHaveCSS("opacity", "0.4");
+  await expect(label.locator("._scf_comp_label_item", { hasText: "1." })).toHaveCSS("opacity", "1");
+  await expect(label.locator("._scf_comp_label_item", { hasText: "2." })).toHaveCSS("opacity", "0.4");
 
   await page.keyboard.press("ArrowLeft");
-  await expect(label.locator("span", { hasText: "3." })).toHaveCSS("opacity", "1");
-  await expect(label.locator("span", { hasText: "1." })).toHaveCSS("opacity", "0.4");
+  await expect(label.locator("._scf_comp_label_item", { hasText: "3." })).toHaveCSS("opacity", "1");
+  await expect(label.locator("._scf_comp_label_item", { hasText: "1." })).toHaveCSS("opacity", "0.4");
 });
 
 test("row navigation with arrow keys", async ({ page }) => {
@@ -222,8 +485,8 @@ test("source menu hides sources and protects the last visible source", async ({ 
   await page.keyboard.press("2");
 
   const label = page.locator("._scf_comp_label");
-  await expect(label.locator("span")).toHaveCount(2);
-  await expect(label.locator("span", { hasText: "2." })).toHaveCSS("opacity", "1");
+  await expect(label.locator("._scf_comp_label_item")).toHaveCount(2);
+  await expect(label.locator("._scf_comp_label_item", { hasText: "2." })).toHaveCSS("opacity", "1");
 
   await sourceButton.click();
   await options.nth(0).locator("input").uncheck();
@@ -252,7 +515,69 @@ test("zoom shortcuts zoom in and reset to fit", async ({ page }) => {
   await page.keyboard.press("Digit0");
   await expect(comp).not.toHaveClass(/_scf_zoomed/);
   await expect.poll(async () => row.evaluate((el) => (el as HTMLElement).style.width))
-    .toBe("100vw");
+    .toBe("100%");
+});
+
+test("fit uses the scrollbar-subtracted content width without hidden horizontal clipping", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 720 });
+  await page.goto("/");
+  await page.evaluate(() => {
+    const images = window.collection!.comparisons[0].images;
+    images[0].publicFileName = "wide-source-a.webp";
+    images[1].publicFileName = "wide-source-b.webp";
+    images[2].publicFileName = "wide-source-c.webp";
+  });
+  await page.click("#open-viewer");
+
+  const comp = page.locator("._scf_comp");
+  // A border-box border is a deterministic stand-in for the classic vertical
+  // scrollbar gutter: it reduces the scroll container's usable content width
+  // without changing window.innerWidth.
+  await comp.evaluate((el) => {
+    const element = el as HTMLElement;
+    element.style.boxSizing = "border-box";
+    element.style.borderRight = "23px solid transparent";
+  });
+
+  await page.keyboard.press("Digit0");
+  await expect.poll(() => comp.evaluate((compEl) => {
+    const element = compEl as HTMLElement;
+    const rowEl = element.querySelector<HTMLElement>("._scf_comp_row")!;
+    return {
+      clientWidth: element.clientWidth,
+      rowWidth: rowEl.offsetWidth,
+      rowStyleWidth: rowEl.style.width,
+      scrollLeft: element.scrollLeft,
+      horizontalOverflow: element.scrollWidth - element.clientWidth,
+      overflowX: getComputedStyle(element).overflowX,
+    };
+  })).toEqual({
+    clientWidth: 777,
+    rowWidth: 777,
+    rowStyleWidth: "100%",
+    scrollLeft: 0,
+    horizontalOverflow: 0,
+    overflowX: "hidden",
+  });
+
+  // Actual size is still a real pixel width and remains horizontally
+  // scrollable when it is wider than the Viewer content box.
+  await page.keyboard.press("KeyO");
+  await expect.poll(() => comp.evaluate((compEl) => {
+    const element = compEl as HTMLElement;
+    const rowEl = element.querySelector<HTMLElement>("._scf_comp_row")!;
+    return {
+      clientWidth: element.clientWidth,
+      rowWidth: rowEl.offsetWidth,
+      scrollWidth: element.scrollWidth,
+      overflowX: getComputedStyle(element).overflowX,
+    };
+  })).toEqual({
+    clientWidth: 777,
+    rowWidth: 1920,
+    scrollWidth: 1920,
+    overflowX: "auto",
+  });
 });
 
 test("mixed-resolution rows keep max canvas aspect ratio", async ({ page }) => {
@@ -326,6 +651,60 @@ test("lazy load: opening the viewer promotes only a handful of cells", async ({ 
   // switchColumn, which cross-loaded across every row).
   expect(stats.promoted).toBeLessThanOrEqual(4);
   expect(stats.promoted).toBeGreaterThanOrEqual(1);
+});
+
+test("lazy load: a nonzero initial column does not promote hidden column zero", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    // openSlowPicsViewer reads #image as the page's active shot. Point it at
+    // row 1 / column 2 so both the always-ready first row and the initial row
+    // exercise buildRow's eager path with a nonzero source.
+    const activeImage = document.createElement("img");
+    activeImage.id = "image";
+    activeImage.src = "https://i.slow.pics/pillar-source-c.webp";
+    document.body.appendChild(activeImage);
+  });
+  await page.click("#open-viewer");
+  await expect(page.locator("._scf_comp")).toBeVisible();
+  await page.waitForTimeout(300);
+
+  const state = await page.evaluate(() => {
+    const root = (document.getElementById("_scf_root_") as HTMLElement).shadowRoot!;
+    const rows = Array.from(root.querySelectorAll<HTMLElement>("._scf_comp_row"));
+    return {
+      hiddenColumnZeroPromoted: rows.filter((row) =>
+        row.querySelectorAll<HTMLImageElement>("._scf_comp_img")[0]?.hasAttribute("src")
+      ).length,
+      eagerRows: rows.slice(0, 2).map((row) => {
+        const images = Array.from(row.querySelectorAll<HTMLImageElement>("._scf_comp_img"));
+        return {
+          column: row.dataset.col,
+          sizer: row.querySelector<HTMLImageElement>("._scf_comp_sizer")?.src.split("/").pop(),
+          promoted: images.map((img) => img.hasAttribute("src")),
+          columnZeroDeferred: !!images[0]?.dataset.src,
+          activeVisibility: images[2]?.style.visibility,
+        };
+      }),
+    };
+  });
+
+  expect(state.hiddenColumnZeroPromoted).toBe(0);
+  expect(state.eagerRows).toEqual([
+    {
+      column: "2",
+      sizer: "wide-source-c.webp",
+      promoted: [false, false, true],
+      columnZeroDeferred: true,
+      activeVisibility: "visible",
+    },
+    {
+      column: "2",
+      sizer: "pillar-source-c.webp",
+      promoted: [false, false, true],
+      columnZeroDeferred: true,
+      activeVisibility: "visible",
+    },
+  ]);
 });
 
 test("lazy load: scrolling the viewport promotes one cell per revealed row", async ({ page }) => {
@@ -539,10 +918,8 @@ test("switching the active source re-anchors the next chroma sync to the new col
     .toBe(true);
   await page.waitForTimeout(150);
 
-  // Toggle the filter off then back on so a fresh sync fires with the new
-  // active column as the anchor. (Switching sources alone doesn't re-run
-  // the filter pipeline — what we want to verify is that the next sync
-  // *does* honor the updated anchor.)
+  // Toggle off and back on too: both navigation and a new mode selection
+  // must prioritize the updated anchor.
   await resetFilterLog(page);
   await page.keyboard.press("KeyF"); // Chroma → Off
   await page.keyboard.press("Shift+KeyF"); // Off → Chroma again
@@ -550,6 +927,75 @@ test("switching the active source re-anchors the next chroma sync to the new col
   await expectLogToHaveEntries(page, 1);
   const secondSync = await readFilterLog(page);
   expect(secondSync[0]).toMatchObject({ rowIdx: 0, colIdx: 2 });
+});
+
+for (const navigation of ["source", "row"] as const) {
+  test(`pending metadata follows the active ${navigation} without leaving the old filter visible`, async ({ page }) => {
+    await openViewer(page, { config: { defaultZoomMode: "fit", mouseSwitch: false } });
+    const compRows = page.locator("._scf_comp_row");
+    const targetRow = navigation === "source" ? 0 : 1;
+    const targetCol = navigation === "source" ? 1 : 0;
+    const targetName = navigation === "source" ? "wide-source-b.webp" : "pillar-source-a.webp";
+    // Preload the destination so this exercises the previously missed path:
+    // navigation to an existing image must still reprioritize filter work.
+    await page.keyboard.press(navigation === "source" ? "Digit2" : "ArrowDown");
+    await expect.poll(() => compRows.nth(targetRow).locator("._scf_comp_img").nth(targetCol)
+      .evaluate((el) => (el as HTMLImageElement).complete && (el as HTMLImageElement).naturalWidth > 0)).toBe(true);
+    await page.keyboard.press(navigation === "source" ? "Digit1" : "ArrowUp");
+    await page.keyboard.press("KeyF"); // Solar
+    const target = compRows.nth(targetRow).locator("._scf_comp_img").nth(targetCol);
+    await expect(target).toHaveCSS("filter", /scf-s1/);
+
+    const oldSource = requestGate();
+    const metadata = pngHeader(iccChunk(iccProfile("2020")));
+    await page.route(/wide-source-a\.webp$/, async (route) => {
+      if (!route.request().headers().range) return route.fallback();
+      oldSource.markStarted();
+      await oldSource.released;
+      await route.fulfill({ contentType: "image/png", body: metadata }).catch(() => {});
+    });
+    await page.route(new RegExp(targetName.replaceAll(".", "\\.") + "$"), async (route) => {
+      if (!route.request().headers().range) return route.fallback();
+      await route.fulfill({ contentType: "image/png", body: metadata });
+    });
+    try {
+      await page.keyboard.press("KeyF"); // Solar 2
+      await page.keyboard.press("KeyF"); // Residual
+      await page.keyboard.press("KeyF"); // Luma, old A request held
+      await oldSource.started;
+      await expect(compRows.first().locator("._scf_comp_img").first()).toHaveCSS("filter", /scf-luma709/);
+      await page.keyboard.press(navigation === "source" ? "Digit2" : "ArrowDown");
+      // A remains held. B must reach the metadata-selected filter without
+      // waiting for A or the 2-second request timeout.
+      await expect(target).toHaveCSS("filter", /scf-luma2020/, { timeout: 1500 });
+      await expect(page.locator("#_scf_hud_")).toContainText("Luma");
+    } finally {
+      oldSource.release();
+    }
+  });
+}
+
+test("switching a pending filter off cancels its metadata request and ignores late results", async ({ page }) => {
+  await openViewer(page, { config: { mouseSwitch: false } });
+  const gate = requestGate();
+  await page.route(/wide-source-a\.webp$/, async (route) => {
+    if (!route.request().headers().range) return route.fallback();
+    gate.markStarted(); await gate.released;
+    await route.fulfill({ contentType: "image/png", body: pngHeader(iccChunk(iccProfile("2020"))) }).catch(() => {});
+  });
+  try {
+    await page.keyboard.press("Shift+KeyF"); // Chroma
+    await gate.started;
+    const failed = page.waitForEvent("requestfailed", { predicate: (request) =>
+      request.url().endsWith("wide-source-a.webp") && !!request.headers().range });
+    await page.keyboard.press("KeyF"); // Off
+    await failed;
+    const image = page.locator("._scf_comp_img").first();
+    await expect(image).toHaveCSS("filter", "none");
+    gate.release();
+    await page.waitForTimeout(100);
+    await expect(image).toHaveCSS("filter", "none");
+  } finally { gate.release(); }
 });
 
 // ─── SVG filter scope: defs and images must share a tree ───────────────────
@@ -701,6 +1147,74 @@ test("gamma mismatch filter defs live in the same tree as the comp images", asyn
   const fragmentId = await readGammaFragmentId();
   expect(fragmentId).not.toBeNull();
   await expectFilterIdResolvesFromImageRoot(page, fragmentId!);
+});
+
+test("gamma calibration precedes Solar without clearing the active filter", async ({
+  page,
+}) => {
+  await openViewer(page);
+  await page.keyboard.press("KeyF");
+
+  async function readActiveFilter(): Promise<string> {
+    return await page.evaluate(() => {
+      const shadow = (document.getElementById("_scf_root_") as HTMLElement | null)
+        ?.shadowRoot;
+      const img = shadow?.querySelector("._scf_comp_img") as HTMLImageElement | null;
+      return img?.style.filter ?? "";
+    });
+  }
+
+  await expect.poll(readActiveFilter, { timeout: 5000 }).toContain("scf-s1");
+
+  await page.evaluate(() => {
+    const shadow = (document.getElementById("_scf_root_") as HTMLElement | null)
+      ?.shadowRoot;
+    const img = shadow?.querySelector("._scf_comp_img") as HTMLImageElement | null;
+    if (!img) throw new Error("Active comparison image not found");
+    const mutations: Array<{ oldValue: string | null; filter: string }> = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        mutations.push({
+          oldValue: record.oldValue,
+          filter: img.style.filter,
+        });
+      }
+    });
+    observer.observe(img, {
+      attributes: true,
+      attributeFilter: ["style"],
+      attributeOldValue: true,
+    });
+    const testWindow = window as unknown as {
+      __gammaSolarMutations: typeof mutations;
+      __gammaSolarObserver: MutationObserver;
+    };
+    testWindow.__gammaSolarMutations = mutations;
+    testWindow.__gammaSolarObserver = observer;
+  });
+
+  await page.keyboard.press("KeyG");
+  await expect.poll(readActiveFilter, { timeout: 5000 })
+    .toContain("scf-gamma-mismatch-aeqt-0p88");
+
+  const result = await page.evaluate(() => {
+    const testWindow = window as unknown as {
+      __gammaSolarMutations: Array<{ oldValue: string | null; filter: string }>;
+      __gammaSolarObserver: MutationObserver;
+    };
+    testWindow.__gammaSolarObserver.disconnect();
+    return {
+      filter: testWindow.__gammaSolarMutations.at(-1)?.filter ?? "",
+      mutations: testWindow.__gammaSolarMutations,
+    };
+  });
+
+  expect(result.mutations).toHaveLength(1);
+  expect(result.mutations[0].oldValue).toContain("scf-s1");
+  const gammaIndex = result.filter.indexOf("scf-gamma-mismatch-aeqt-0p88");
+  const solarIndex = result.filter.indexOf("scf-s1");
+  expect(gammaIndex).toBeGreaterThanOrEqual(0);
+  expect(solarIndex).toBeGreaterThan(gammaIndex);
 });
 
 // ─── Settings-driven runtime behavior ──────────────────────────────────────
@@ -928,11 +1442,11 @@ test("settings: mouseSwitch=false suppresses pointer-driven column switching", a
   const midY = rowBox.y + rowBox.height / 2;
   await setConfig(page, { mouseSwitch: true });
   await page.mouse.move(rightX, midY);
-  await expect(label.locator("span", { hasText: "3." })).toHaveCSS("opacity", "1");
+  await expect(label.locator("._scf_comp_label_item", { hasText: "3." })).toHaveCSS("opacity", "1");
 
   // Move back to col 1, then disable mouseSwitch and try the same motion.
   await page.keyboard.press("1");
-  await expect(label.locator("span", { hasText: "1." })).toHaveCSS("opacity", "1");
+  await expect(label.locator("._scf_comp_label_item", { hasText: "1." })).toHaveCSS("opacity", "1");
 
   await setConfig(page, { mouseSwitch: false });
   // Wiggle the pointer (browsers ignore mousemove with identical coords).
@@ -941,10 +1455,52 @@ test("settings: mouseSwitch=false suppresses pointer-driven column switching", a
 
   // Give any spurious switch a chance to fire; col 1 must still be active.
   await page.waitForTimeout(150);
-  await expect(label.locator("span", { hasText: "1." })).toHaveCSS("opacity", "1");
+  await expect(label.locator("._scf_comp_label_item", { hasText: "1." })).toHaveCSS("opacity", "1");
 
   // Cleanup: restore default for any subsequent test that might share this page.
   await setConfig(page, { mouseSwitch: true });
+});
+
+test("settings: title layout sits under Mouse switch and updates an open viewer", async ({ page }) => {
+  await openViewer(page, { config: { uiChromeMode: "always", sourceTitleLayout: "dense" } });
+  const label = page.locator("._scf_comp_label");
+  await expect(label).not.toHaveClass(/_scf_comp_label_columns/);
+  const denseGeometry = await label.evaluate((labelEl) => {
+    const labelRect = labelEl.getBoundingClientRect();
+    return {
+      centerDelta: (labelRect.left + labelRect.width / 2) - window.innerWidth / 2,
+      labelWidth: labelRect.width,
+      viewportWidth: window.innerWidth,
+    };
+  });
+  expect(Math.abs(denseGeometry.centerDelta)).toBeLessThan(1);
+  expect(denseGeometry.labelWidth).toBeLessThan(denseGeometry.viewportWidth);
+
+  await openSettingsModal(page);
+  const titleRow = page.locator("._scf_settings_row").filter({
+    has: page.locator("._scf_settings_label", { hasText: "Title layout" }),
+  });
+  await expect(titleRow).toHaveCount(1);
+  expect(await titleRow.evaluate((row) =>
+    row.previousElementSibling?.querySelector("._scf_settings_label")?.firstChild?.textContent?.trim()
+  )).toBe("Mouse switch");
+  await expect(titleRow.getByRole("button", { name: "Dense", exact: true })).toHaveClass(/_scf_selected/);
+
+  await titleRow.getByRole("button", { name: "Filled", exact: true }).click();
+  await expect(label).toHaveClass(/_scf_comp_label_columns/);
+  await expect(titleRow.getByRole("button", { name: "Filled", exact: true })).toHaveClass(/_scf_selected/);
+  const filledCenterDeltas = await label.locator("._scf_comp_label_item").evaluateAll((items) => {
+    const labelRect = items[0].parentElement!.getBoundingClientRect();
+    return items.map((item, i) => {
+      const rect = item.getBoundingClientRect();
+      const expectedCenter = labelRect.left + labelRect.width * (i + 0.5) / items.length;
+      return rect.left + rect.width / 2 - expectedCenter;
+    });
+  });
+  for (const delta of filledCenterDeltas) expect(Math.abs(delta)).toBeLessThan(1);
+
+  await titleRow.getByRole("button", { name: "Dense", exact: true }).click();
+  await expect(label).not.toHaveClass(/_scf_comp_label_columns/);
 });
 
 // ── ① Auto-hide UI: the three chrome modes ────────────────────────────────────
@@ -1419,9 +1975,18 @@ test("closing the viewer cancels the pending background-load kickoff", async ({ 
     page.evaluate(
       () => (window as unknown as { __cells: HTMLImageElement[] }).__cells.filter((i) => i.src).length,
     );
-  const before = await promotedCount();
+  // IntersectionObserver may legitimately promote a row between Playwright
+  // calls. Capture the baseline in Escape's capture phase, immediately before
+  // the viewer closes, rather than counting that pre-close work as a leak.
+  await page.evaluate(() => {
+    document.addEventListener("keydown", () => {
+      const state = window as unknown as { __cells: HTMLImageElement[]; __promotedAtClose: number };
+      state.__promotedAtClose = state.__cells.filter((image) => image.src).length;
+    }, { capture: true, once: true });
+  });
   await page.keyboard.press("Escape");
   await expect(page.locator("._scf_comp")).not.toBeVisible();
+  const before = await page.evaluate(() => (window as unknown as { __promotedAtClose: number }).__promotedAtClose);
 
   // Outlive both kickoff timers (200 ms post-sizer-load and the 3 s net).
   await page.waitForTimeout(3600);
@@ -1449,8 +2014,8 @@ test("source label is populated at open before any interaction", async ({ page }
   await openViewer(page, { config: { uiChromeMode: "always" } });
 
   const label = page.locator("._scf_comp_label");
-  await expect(label.locator("span")).toHaveCount(3);
-  await expect(label.locator("span", { hasText: "1." })).toHaveCSS("opacity", "1");
+  await expect(label.locator("._scf_comp_label_item")).toHaveCount(3);
+  await expect(label.locator("._scf_comp_label_item", { hasText: "1." })).toHaveCSS("opacity", "1");
 });
 
 test("shortcut capture swallows the trailing keyup of the captured key", async ({ page }) => {
@@ -1586,7 +2151,8 @@ async function openPerRowNamesViewer(page: Page): Promise<void> {
 test("slow.pics: the banner shows the current row's names and follows key navigation", async ({ page }) => {
   await openPerRowNamesViewer(page);
 
-  const spans = page.locator("._scf_comp_label span");
+  await expect(page.locator("._scf_comp_label")).not.toHaveClass(/_scf_comp_label_columns/);
+  const spans = page.locator("._scf_comp_label > ._scf_comp_label_item");
   await expect(spans.first()).toHaveText("1. (B) Source A");
   await expect(spans.nth(1)).toHaveText("2. (B) Encode X");
 
@@ -1600,10 +2166,155 @@ test("slow.pics: the banner shows the current row's names and follows key naviga
   await expect(spans.nth(1)).toHaveCSS("opacity", "1");
 });
 
+test("filled source banner centers each title block and indents wrapped names after its number", async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 720 });
+  await page.goto("/");
+  await page.evaluate(() => {
+    (window as unknown as { __yacomp: YacompTestHooks }).__yacomp.saveConfig({
+      uiChromeMode: "always",
+      sourceTitleLayout: "filled",
+    });
+    (window as unknown as { collection: unknown }).collection = {
+      comparisons: [
+        {
+          key: "long-names",
+          images: Array.from({ length: 12 }, (_, i) => ({
+            name: `(B) An exceptionally long source label that must wrap to fit ${i + 1}`,
+            publicFileName: `long-name-${i + 1}.webp`,
+          })),
+        },
+        {
+          key: "short-names",
+          images: Array.from({ length: 12 }, (_, i) => ({
+            name: `(P) S${i + 1}`,
+            publicFileName: `short-name-${i + 1}.webp`,
+          })),
+        },
+      ],
+    };
+  });
+  await page.keyboard.press("KeyV");
+
+  const label = page.locator("._scf_comp_label");
+  await expect(label).toBeVisible();
+  await expect(label).toHaveCSS("font-size", "16px");
+  const items = label.locator(":scope > ._scf_comp_label_item");
+  await expect(items).toHaveCount(12);
+  const firstItem = items.first();
+  await expect(firstItem).toHaveCSS("justify-self", "center");
+  await expect(firstItem).toHaveCSS("text-align", "left");
+  await expect(firstItem.locator("._scf_comp_label_index")).toHaveText("1.");
+  const firstName = firstItem.locator("._scf_comp_label_name");
+  await expect(firstName).toHaveText("(B) An exceptionally long source label that must wrap to fit 1");
+  await expect(firstName).toHaveCSS("overflow-wrap", "anywhere");
+  expect(await firstName.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThan(16);
+
+  await page.keyboard.press("ArrowDown");
+  await expect(label.locator("._scf_comp_label_item").first()).toHaveText("1. (P) S1");
+  await expect(label).toHaveCSS("font-size", "16px");
+});
+
+test("source banner compacts a one- or two-character orphan but keeps a longer second line", async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 720 });
+  await page.goto("/");
+  await page.evaluate(() => {
+    (window as unknown as { __yacomp: YacompTestHooks }).__yacomp.saveConfig({
+      uiChromeMode: "always",
+      sourceTitleLayout: "filled",
+    });
+    (window as unknown as { collection: unknown }).collection = {
+      comparisons: [
+        {
+          key: "near-orphan",
+          images: Array.from({ length: 4 }, (_, i) => ({
+            name: "12345678",
+            publicFileName: `near-orphan-${i + 1}.webp`,
+          })),
+        },
+        {
+          key: "long-tail",
+          images: Array.from({ length: 4 }, (_, i) => ({
+            name: "12345678901",
+            publicFileName: `long-tail-${i + 1}.webp`,
+          })),
+        },
+      ],
+    };
+  });
+  await page.keyboard.press("KeyV");
+
+  const label = page.locator("._scf_comp_label");
+  const firstItem = label.locator("._scf_comp_label_item").first();
+  const firstName = firstItem.locator("._scf_comp_label_name");
+  await expect(label).toHaveClass(/_scf_comp_label_columns/);
+  await expect(firstItem).not.toHaveCSS("font-size", "16px");
+  expect(await firstName.evaluate((el) => el.getBoundingClientRect().height)).toBeLessThan(16);
+
+  await page.keyboard.press("ArrowDown");
+  await expect(firstName).toHaveText("12345678901");
+  await expect(firstItem).toHaveCSS("font-size", "16px");
+  expect(await firstName.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThan(16);
+});
+
+test("source banner and hover columns end before the comparison scrollbar gutter", async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 720 });
+  await page.goto("/");
+  await page.evaluate(() => {
+    (window as unknown as { __yacomp: YacompTestHooks }).__yacomp.saveConfig({
+      uiChromeMode: "always",
+      sourceTitleLayout: "filled",
+    });
+    (window as unknown as { collection: unknown }).collection = {
+      comparisons: [{
+        key: "scrollbar-gutter",
+        images: Array.from({ length: 12 }, (_, i) => ({
+          name: `(B) A long label that needs its own source column ${i + 1}`,
+          publicFileName: `scrollbar-gutter-${i + 1}.webp`,
+        })),
+      }],
+    };
+  });
+  await page.keyboard.press("KeyV");
+
+  const label = page.locator("._scf_comp_label");
+  const comp = page.locator("._scf_comp");
+  await expect(label).toHaveClass(/_scf_comp_label_columns/);
+  // A border-box border is a deterministic stand-in for a browser-reserved
+  // scrollbar gutter: it reduces the scroll container's actual content width.
+  await comp.evaluate((el) => {
+    el.style.boxSizing = "border-box";
+    el.style.borderRight = "23px solid transparent";
+    window.dispatchEvent(new Event("resize"));
+  });
+
+  await expect.poll(() => label.evaluate((labelEl) => {
+    const root = labelEl.getRootNode() as ShadowRoot;
+    const compEl = root.querySelector<HTMLElement>("._scf_comp")!;
+    const labelRect = labelEl.getBoundingClientRect();
+    const compRect = compEl.getBoundingClientRect();
+    return {
+      gutter: compEl.offsetWidth - compEl.clientWidth,
+      labelRight: labelRect.right,
+      contentRight: compRect.left + compEl.clientWidth,
+      contentWidth: compEl.clientWidth,
+      labelWidth: labelRect.width,
+    };
+  })).toEqual(expect.objectContaining({ gutter: 23, labelWidth: 377, labelRight: 377, contentRight: 377 }));
+
+  const metrics = await label.evaluate((labelEl) => {
+    const root = labelEl.getRootNode() as ShadowRoot;
+    const compEl = root.querySelector<HTMLElement>("._scf_comp")!;
+    return { contentWidth: compEl.clientWidth };
+  });
+  const hoverX = metrics.contentWidth * 11 / 12 + 1;
+  await page.mouse.move(hoverX, 200);
+  await expect(label.locator("._scf_comp_label_item").last()).toHaveCSS("opacity", "1");
+});
+
 test("slow.pics: scroll-driven row changes update the banner too", async ({ page }) => {
   await openPerRowNamesViewer(page);
 
-  const spans = page.locator("._scf_comp_label span");
+  const spans = page.locator("._scf_comp_label > ._scf_comp_label_item");
   await expect(spans.first()).toHaveText("1. (B) Source A");
 
   // Plain-wheel to the bottom: the scroll sync lands on the last row.
